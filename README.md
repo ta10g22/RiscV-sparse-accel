@@ -24,17 +24,17 @@ All code, documentation, and results will be maintained in this open-source repo
 
 ---
 
-## 🗂️ Repository Structure
 ai-accelerator/
-│- rtl/ # SystemVerilog RTL modules
-│- tb/ # Testbenches (SystemVerilog)
-|- ip/ # risc-v core
-│─ sw/ # Example RISC-V programs to exercise accelerator
-│─ fpga/ # Quartus Project, pin assignments
-│─ docs/ # block diagrams, notes
-│─ scripts/ # Build and simulation scripts
-|─ sim/ # modelsim files  
-│─ README.md # This file. this is the i
+├── rtl/        # SystemVerilog RTL modules
+├── tb/         # Testbenches (SystemVerilog)
+├── ip/         # RISC-V core and third-party IP
+├── sw/         # RISC-V programs to exercise the accelerator
+├── fpga/       # Quartus project files, pin assignments, SDC
+├── docs/       # Block diagrams, notes, specifications
+├── scripts/    # Build + utility scripts (Make, Python, Tcl)
+├── sim/        # ModelSim scripts, build dirs, waveform outputs
+└── README.md   # Project overview
+
 ---
 
 ## ✅ Success Criteria
