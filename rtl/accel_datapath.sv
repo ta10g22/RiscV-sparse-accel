@@ -30,7 +30,7 @@ module accel_datapath #(
     input  logic [$clog2(TN)-1:0]    ctile_read_col,
     output logic [DATA_WIDTH-1:0]    ctile_read_data,
 
-    // ReLU / dtype + final WB path
+    // ReLU, / dtype + final WB path
     input  logic                     relu_en,
     input  logic [3:0]               dtype,
     input  logic                     wb_en,
