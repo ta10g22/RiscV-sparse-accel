@@ -1,9 +1,9 @@
-
-//this is the control functionality of my accelerator 
+//this is the control functionality of the SpMM accelerator
+//it works with accel_datapath for full functionality
 
 module accel_ctrl #(
-    parameter int M_MAX      = 64,   // should be the matrix 
-    parameter int TN         = 8,    // tile lengh i think
+    parameter int M_MAX      = 64,   // the maximum length m can be is 64 (N is capped at TN per write)
+    parameter int TN         = 8,    // tile length
     parameter int ADDR_WIDTH = 32,   // 2^32 address spaces
     parameter int DATA_WIDTH = 32    // 32 bit memory at each address
 )

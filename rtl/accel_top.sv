@@ -1,184 +1,72 @@
-//This is the top level wrapper for the sparse matrix accelerator
-//it instantiates the accel_ctrl and accel_datapath and wires all signals internally
-//exposes ram interface from the ctrl block
+// top level of the accelerator responsible for the inputs and outputs and
+// connections throughout the accelerator
 
 module accel_top #(
-    parameter int M_MAX      = 64,
-    parameter int TN         = 8,
-    parameter int ADDR_WIDTH = 32,
-    parameter int DATA_WIDTH = 32
-)( 
-    
+    parameter int M_MAX       = 64,
+    parameter int TN          = 8,
+    parameter int ADDR_WIDTH  = 32,
+    parameter int DATA_WIDTH  = 32
+)(
     input  logic                     clk,
     input  logic                     n_reset,
 
-// --------- MMIO interface from CPU -----------
-    input  logic                     mmio_cs,      // accelerator region selected
-    input  logic                     mmio_we,      // write enable
-    input  logic [ADDR_WIDTH-1:0]    mmio_addr,    // byte address within accel MMIO
+    input  logic [ADDR_WIDTH-1:0]    mmio_addr,
     input  logic [DATA_WIDTH-1:0]    mmio_wdata,
+    input  logic                     mmio_we,
+    input  logic                     mmio_re,
     input  logic [DATA_WIDTH/8-1:0]  mmio_wstrb,
+    input  logic                     mmio_valid,
     output logic [DATA_WIDTH-1:0]    mmio_rdata,
+    output logic                     mmio_ready,
 
-
-    // ---------------- System RAM interface ----------------
     output logic                     ram_re,
     output logic                     ram_we,
     output logic [ADDR_WIDTH-1:0]    ram_addr,
     output logic [DATA_WIDTH-1:0]    ram_wdata,
     input  logic [DATA_WIDTH-1:0]    ram_rdata,
 
-    // ---------------- Interrupt to CPU ----------------
-    output logic                     irq_out
+    output logic [3:0]               led,
+    output logic                     irq
 );
 
+    // MMIO offsets (byte offsets)
+    localparam logic [ADDR_WIDTH-1:0] CTRL_OFFSET       = 32'h00;
+    localparam logic [ADDR_WIDTH-1:0] STATUS_OFFSET     = 32'h04;
+    localparam logic [ADDR_WIDTH-1:0] M_OFFSET          = 32'h08;
+    localparam logic [ADDR_WIDTH-1:0] N_OFFSET          = 32'h0C;
+    localparam logic [ADDR_WIDTH-1:0] K_OFFSET          = 32'h10;
+    localparam logic [ADDR_WIDTH-1:0] A_VAL_BASE_OFFSET = 32'h14;
+    localparam logic [ADDR_WIDTH-1:0] A_ROW_BASE_OFFSET = 32'h18;
+    localparam logic [ADDR_WIDTH-1:0] A_COL_BASE_OFFSET = 32'h1C;
+    localparam logic [ADDR_WIDTH-1:0] B_BASE_OFFSET     = 32'h20;
+    localparam logic [ADDR_WIDTH-1:0] C_BASE_OFFSET     = 32'h24;
+    localparam logic [ADDR_WIDTH-1:0] NNZ_OFFSET        = 32'h28;
 
-        // MMIO register map (byte offsets)
-    localparam logic [ADDR_WIDTH-1:0] REG_CTRL        = 32'h00; // [0]=START (pulse), [1]=CLEAR (pulse), [2]=IRQ_EN
-    localparam logic [ADDR_WIDTH-1:0] REG_STATUS      = 32'h04; // [0]=BUSY, [1]=DONE
+    // CTRL/STATUS bitfields
+    localparam int CTRL_START_BIT  = 0;
+    localparam int CTRL_CLEAR_BIT  = 1;
+    localparam int CTRL_IRQ_EN_BIT = 2;
+    localparam int CTRL_RELU_BIT   = 3;
 
-    localparam logic [ADDR_WIDTH-1:0] REG_M           = 32'h10;
-    localparam logic [ADDR_WIDTH-1:0] REG_N           = 32'h14;
-    localparam logic [ADDR_WIDTH-1:0] REG_K           = 32'h18;
-    localparam logic [ADDR_WIDTH-1:0] REG_NNZ         = 32'h1C;
+    localparam int STATUS_BUSY_BIT = 0;
+    localparam int STATUS_DONE_BIT = 1;
 
-    localparam logic [ADDR_WIDTH-1:0] REG_ROWPTR_BASE = 32'h20;
-    localparam logic [ADDR_WIDTH-1:0] REG_COLIDX_BASE = 32'h24;
-    localparam logic [ADDR_WIDTH-1:0] REG_VAL_BASE    = 32'h28;
-    localparam logic [ADDR_WIDTH-1:0] REG_B_BASE      = 32'h2C;
-    localparam logic [ADDR_WIDTH-1:0] REG_OUT_BASE    = 32'h30;
+    // MMIO registers (config only)
+    logic [DATA_WIDTH-1:0] ctrl_reg;
+    logic [DATA_WIDTH-1:0] M_reg, N_reg, K_reg;
+    logic [DATA_WIDTH-1:0] A_val_base_reg;
+    logic [DATA_WIDTH-1:0] A_row_base_reg;
+    logic [DATA_WIDTH-1:0] A_col_base_reg;
+    logic [DATA_WIDTH-1:0] B_base_reg;
+    logic [DATA_WIDTH-1:0] C_base_reg;
+    logic [DATA_WIDTH-1:0] NNZ_reg;
 
-    localparam logic [ADDR_WIDTH-1:0] REG_RELU_DTYPE  = 32'h40; // [0]=RELU_EN, [7:4]=dtype
+    // internal signals
+    logic start_pulse, clear_pulse;
+    logic status_busy, status_done;
+    logic irq_out, irq_en;
 
-
-    // Config registers visible to accel_ctrl
-
-    logic [31:0]              M_reg;
-    logic [31:0]              N_reg;
-    logic [31:0]              K_reg;
-    logic [31:0]              NNZ_reg;
-
-    logic [ADDR_WIDTH-1:0]    rowptr_base_reg;
-    logic [ADDR_WIDTH-1:0]    colidx_base_reg;
-    logic [ADDR_WIDTH-1:0]    val_base_reg;
-    logic [ADDR_WIDTH-1:0]    B_base_reg;
-    logic [ADDR_WIDTH-1:0]    out_base_reg;
-
-    logic                     relu_en_reg;
-    logic [3:0]               dtype_reg;
-    logic                     irq_en_reg;
-
-    // Pulses derived from MMIO writes
-    logic start_pulse;
-    logic clear_pulse;
-
-    // Status from controller
-    logic status_busy;
-    logic status_done;
-
-    // MMIO write path: update config regs and generate pulses
-
-    // START and CLEAR as 1-cycle pulses on writes to REG_CTRL.
-    // irq_en_reg is latched.
-
-    always_ff @(posedge clk or negedge n_reset) begin
-        if (!n_reset) begin
-            M_reg           <= 32'd0;
-            N_reg           <= 32'd0;
-            K_reg           <= 32'd0;
-            NNZ_reg         <= 32'd0;
-
-            rowptr_base_reg <= '0;
-            colidx_base_reg <= '0;
-            val_base_reg    <= '0;
-            B_base_reg      <= '0;
-            out_base_reg    <= '0;
-
-            relu_en_reg     <= 1'b0;
-            dtype_reg       <= 4'd0;
-            irq_en_reg      <= 1'b0;
-        end
-        else begin
-            if (mmio_cs && mmio_we && (|mmio_wstrb)) begin
-                unique case (mmio_addr)
-                    REG_CTRL: begin
-                        irq_en_reg <= mmio_wdata[2];
-                        // bits [1:0] are used only for pulses, not latched
-                    end
-
-                    REG_M:           M_reg           <= mmio_wdata;
-                    REG_N:           N_reg           <= mmio_wdata;
-                    REG_K:           K_reg           <= mmio_wdata;
-                    REG_NNZ:         NNZ_reg         <= mmio_wdata;
-
-                    REG_ROWPTR_BASE: rowptr_base_reg <= mmio_wdata[ADDR_WIDTH-1:0];
-                    REG_COLIDX_BASE: colidx_base_reg <= mmio_wdata[ADDR_WIDTH-1:0];
-                    REG_VAL_BASE:    val_base_reg    <= mmio_wdata[ADDR_WIDTH-1:0];
-                    REG_B_BASE:      B_base_reg      <= mmio_wdata[ADDR_WIDTH-1:0];
-                    REG_OUT_BASE:    out_base_reg    <= mmio_wdata[ADDR_WIDTH-1:0];
-
-                    REG_RELU_DTYPE: begin
-                        relu_en_reg <= mmio_wdata[0];
-                        dtype_reg   <= mmio_wdata[7:4];
-                    end
-
-                    default: ; // ignore writes to unknown offsets
-                endcase
-            end
-        end
-    end
-
-    // Generate single-cycle pulses for START and CLEAR when CPU writes REG_CTRL.
-    always_comb begin
-        start_pulse = 1'b0;
-        clear_pulse = 1'b0;
-
-        if (mmio_cs && mmio_we && (|mmio_wstrb) && (mmio_addr == REG_CTRL)) begin
-            start_pulse = mmio_wdata[0];
-            clear_pulse = mmio_wdata[1];
-        end
-    end
-
-    //  MMIO read path
-    always_comb begin
-        mmio_rdata = '0;
-
-        if (mmio_cs && !mmio_we) begin
-            unique case (mmio_addr)
-                REG_CTRL: begin
-                    mmio_rdata[2] = irq_en_reg;
-                    // bits [1:0] read as 0 (pulses)
-                end
-
-                REG_STATUS: begin
-                    mmio_rdata[0] = status_busy;
-                    mmio_rdata[1] = status_done;
-                end
-
-                REG_M:           mmio_rdata = M_reg;
-                REG_N:           mmio_rdata = N_reg;
-                REG_K:           mmio_rdata = K_reg;
-                REG_NNZ:         mmio_rdata = NNZ_reg;
-
-                REG_ROWPTR_BASE: mmio_rdata = rowptr_base_reg;
-                REG_COLIDX_BASE: mmio_rdata = colidx_base_reg;
-                REG_VAL_BASE:    mmio_rdata = val_base_reg;
-                REG_B_BASE:      mmio_rdata = B_base_reg;
-                REG_OUT_BASE:    mmio_rdata = out_base_reg;
-
-                REG_RELU_DTYPE: begin
-                    mmio_rdata[0]   = relu_en_reg;
-                    mmio_rdata[7:4] = dtype_reg;
-                end
-
-                default: mmio_rdata = '0;
-            endcase
-        end
-    end
-
-
-
-    // Wires between ctrl and datapath
+    // control to datapath wires
     logic                      dp_clear_en;
     logic [$clog2(M_MAX)-1:0]  dp_clear_row;
     logic [$clog2(TN)-1:0]     dp_clear_col;
@@ -203,50 +91,123 @@ module accel_top #(
     logic [3:0]                dp_dtype;
     logic [DATA_WIDTH-1:0]     dp_wb_data_out;
 
+    // constants / simple wiring
+    assign mmio_ready = 1'b1;
+    assign irq_en     = ctrl_reg[CTRL_IRQ_EN_BIT];
+    assign irq        = irq_out;
 
+    // LEDs: ON when busy, OFF when not
+    assign led = {3'b000, status_busy};
 
-             // accel_ctrl instance
-     accel_ctrl #(
+    // update MMIO config registers
+    always_ff @(posedge clk or negedge n_reset) begin
+        if (!n_reset) begin
+            ctrl_reg       <= '0;
+            M_reg          <= '0;
+            N_reg          <= '0;
+            K_reg          <= '0;
+            A_val_base_reg <= '0;
+            A_row_base_reg <= '0;
+            A_col_base_reg <= '0;
+            B_base_reg     <= '0;
+            C_base_reg     <= '0;
+            NNZ_reg        <= '0;
+        end else if (mmio_we && mmio_valid && (|mmio_wstrb)) begin
+            unique case (mmio_addr)
+                CTRL_OFFSET: begin
+                    ctrl_reg[CTRL_IRQ_EN_BIT] <= mmio_wdata[CTRL_IRQ_EN_BIT];
+                    ctrl_reg[CTRL_RELU_BIT]   <= mmio_wdata[CTRL_RELU_BIT];
+                end
+                M_OFFSET:          M_reg          <= mmio_wdata;
+                N_OFFSET:          N_reg          <= mmio_wdata;
+                K_OFFSET:          K_reg          <= mmio_wdata;
+                A_VAL_BASE_OFFSET: A_val_base_reg <= mmio_wdata;
+                A_ROW_BASE_OFFSET: A_row_base_reg <= mmio_wdata;
+                A_COL_BASE_OFFSET: A_col_base_reg <= mmio_wdata;
+                B_BASE_OFFSET:     B_base_reg     <= mmio_wdata;
+                C_BASE_OFFSET:     C_base_reg     <= mmio_wdata;
+                NNZ_OFFSET:        NNZ_reg        <= mmio_wdata;
+                default: ; // ignore
+            endcase
+        end
+    end
+
+    // start & clear pulses derived from CTRL write
+    always_comb begin
+        start_pulse = 1'b0;
+        clear_pulse = 1'b0;
+
+        if (mmio_we && mmio_valid && (mmio_addr == CTRL_OFFSET) && (|mmio_wstrb)) begin
+            start_pulse = mmio_wdata[CTRL_START_BIT];
+            clear_pulse = mmio_wdata[CTRL_CLEAR_BIT];
+        end
+    end
+
+    // MMIO read mux
+    always_comb begin
+        mmio_rdata = '0;
+        if (mmio_re && mmio_valid) begin
+            unique case (mmio_addr)
+                CTRL_OFFSET: begin
+                    mmio_rdata[CTRL_IRQ_EN_BIT] = ctrl_reg[CTRL_IRQ_EN_BIT];
+                    mmio_rdata[CTRL_RELU_BIT]   = ctrl_reg[CTRL_RELU_BIT];
+                end
+                STATUS_OFFSET: begin
+                    mmio_rdata[STATUS_BUSY_BIT] = status_busy;
+                    mmio_rdata[STATUS_DONE_BIT] = status_done;
+                end
+                M_OFFSET:          mmio_rdata = M_reg;
+                N_OFFSET:          mmio_rdata = N_reg;
+                K_OFFSET:          mmio_rdata = K_reg;
+                A_VAL_BASE_OFFSET: mmio_rdata = A_val_base_reg;
+                A_ROW_BASE_OFFSET: mmio_rdata = A_row_base_reg;
+                A_COL_BASE_OFFSET: mmio_rdata = A_col_base_reg;
+                B_BASE_OFFSET:     mmio_rdata = B_base_reg;
+                C_BASE_OFFSET:     mmio_rdata = C_base_reg;
+                NNZ_OFFSET:        mmio_rdata = NNZ_reg;
+                default:           mmio_rdata = '0;
+            endcase
+        end
+    end
+
+    // controller
+    accel_ctrl #(
         .M_MAX      (M_MAX),
         .TN         (TN),
         .ADDR_WIDTH (ADDR_WIDTH),
         .DATA_WIDTH (DATA_WIDTH)
-    ) u_accel_ctrl (
+    ) ac1 (
         .clk              (clk),
         .n_reset          (n_reset),
 
-        // control + config
         .start_pulse      (start_pulse),
         .clear_pulse      (clear_pulse),
-        .irq_en           (irq_en_reg),
+        .irq_en           (irq_en),
 
         .M_reg            (M_reg),
         .N_reg            (N_reg),
         .K_reg            (K_reg),
         .NNZ_reg          (NNZ_reg),
 
-        .rowptr_base_reg  (rowptr_base_reg),
-        .colidx_base_reg  (colidx_base_reg),
-        .val_base_reg     (val_base_reg),
+        .rowptr_base_reg  (A_row_base_reg),
+        .colidx_base_reg  (A_col_base_reg),
+        .val_base_reg     (A_val_base_reg),
         .B_base_reg       (B_base_reg),
-        .out_base_reg     (out_base_reg),
+        .out_base_reg     (C_base_reg),
 
-        .relu_en_reg      (relu_en_reg),
-        .dtype_reg        (dtype_reg),
+        .relu_en_reg      (ctrl_reg[CTRL_RELU_BIT]),
+        .dtype_reg        (4'd0),
 
-        // status
         .status_busy      (status_busy),
         .status_done      (status_done),
         .irq_out          (irq_out),
 
-        // system RAM interface
         .ram_re           (ram_re),
         .ram_we           (ram_we),
         .ram_addr         (ram_addr),
         .ram_wdata        (ram_wdata),
         .ram_rdata        (ram_rdata),
 
-        // datapath control
         .dp_clear_en      (dp_clear_en),
         .dp_clear_row     (dp_clear_row),
         .dp_clear_col     (dp_clear_col),
@@ -272,45 +233,34 @@ module accel_top #(
         .dp_wb_data_out   (dp_wb_data_out)
     );
 
- 
-    // accel_datapath instance (we'll define this next) 
-    accel_datapath #(
-        .M_MAX      (M_MAX),
-        .TN         (TN),
-        .DATA_WIDTH (DATA_WIDTH)
-    ) u_accel_datapath (
-        .clk               (clk),
-        .rst_n             (n_reset),
+    // datapath
+    accel_datapath ad1 (
+        .clk              (clk),
+        .n_reset            (n_reset),
 
-        // tile clear
-        .clear_en          (dp_clear_en),
-        .clear_row         (dp_clear_row),
-        .clear_col         (dp_clear_col),
+        .clear_en         (dp_clear_en),
+        .clear_row        (dp_clear_row),
+        .clear_col        (dp_clear_col),
 
-        // B_seg load
-        .bseg_we           (dp_bseg_we),
-        .bseg_idx          (dp_bseg_idx),
-        .bseg_wdata        (dp_bseg_wdata),
+        .bseg_we          (dp_bseg_we),
+        .bseg_idx         (dp_bseg_idx),
+        .bseg_wdata       (dp_bseg_wdata),
 
-        // MAC
-        .mac_en            (dp_mac_en),
-        .mac_row           (dp_mac_row),
-        .mac_col           (dp_mac_col),
-        .mac_a             (dp_mac_a),
+        .mac_en           (dp_mac_en),
+        .mac_row          (dp_mac_row),
+        .mac_col          (dp_mac_col),
+        .mac_a            (dp_mac_a),
 
-        // C_tile read for writeback
-        .ctile_read_en     (dp_ctile_read_en),
-        .ctile_read_row    (dp_ctile_read_row),
-        .ctile_read_col    (dp_ctile_read_col),
-        .ctile_read_data   (dp_ctile_read_data),
+        .ctile_read_en    (dp_ctile_read_en),
+        .ctile_read_row   (dp_ctile_read_row),
+        .ctile_read_col   (dp_ctile_read_col),
+        .ctile_read_data  (dp_ctile_read_data),
 
-        // ReLU / dtype + final WB path
-        .relu_en           (dp_relu_en),
-        .dtype             (dp_dtype),
-        .wb_en             (dp_wb_en),
-        .wb_in             (dp_wb_in),
-        .wb_data_out       (dp_wb_data_out)
+        .relu_en          (dp_relu_en),
+        .dtype            (dp_dtype),
+        .wb_en            (dp_wb_en),
+        .wb_in            (dp_wb_in),
+        .wb_data_out      (dp_wb_data_out)
     );
-
 
 endmodule
