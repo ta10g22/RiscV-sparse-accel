@@ -221,10 +221,10 @@ module accel_top #(
         .dp_mac_col       (dp_mac_col),
         .dp_mac_a         (dp_mac_a),
 
-        .dp_ctile_read_en (dp_ctile_read_en),
-        .dp_ctile_read_row(dp_ctile_read_row),
-        .dp_ctile_read_col(dp_ctile_read_col),
-        .dp_ctile_read_data(dp_ctile_read_data),
+        .dp_ctile_read_en   (dp_ctile_read_en),
+        .dp_ctile_read_row  (dp_ctile_read_row),
+        .dp_ctile_read_col  (dp_ctile_read_col),
+        .dp_ctile_read_data (dp_ctile_read_data),
 
         .dp_wb_en         (dp_wb_en),
         .dp_wb_in         (dp_wb_in),
@@ -234,9 +234,13 @@ module accel_top #(
     );
 
     // datapath
-    accel_datapath ad1 (
+    accel_datapath #(
+        .M_MAX      (M_MAX),
+        .TN         (TN),
+        .DATA_WIDTH (DATA_WIDTH)
+    ) ad1 (
         .clk              (clk),
-        .n_reset            (n_reset),
+        .n_reset          (n_reset),
 
         .clear_en         (dp_clear_en),
         .clear_row        (dp_clear_row),

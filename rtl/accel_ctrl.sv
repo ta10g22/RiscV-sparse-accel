@@ -11,7 +11,7 @@ module accel_ctrl #(
     input  logic                     clk,
     input  logic                     n_reset,
 
-    // control + config for top 
+    // control + config for top
     input  logic                     start_pulse,
     input  logic                     clear_pulse,
     input  logic                     irq_en,
@@ -35,7 +35,7 @@ module accel_ctrl #(
     output logic                     status_done,
     output logic                     irq_out,
 
-    // system ram interface
+    // system ram interface (SYNC read: ram_rdata valid next cycle after ram_re)
     output logic                     ram_re,
     output logic                     ram_we,
     output logic [ADDR_WIDTH-1:0]    ram_addr,
@@ -54,7 +54,7 @@ module accel_ctrl #(
     output logic [$clog2(TN)-1:0]     dp_bseg_idx,
     output logic [DATA_WIDTH-1:0]     dp_bseg_wdata,
 
-    //MAC 
+    //MAC
     output logic                      dp_mac_en,
     output logic [$clog2(M_MAX)-1:0]  dp_mac_row,
     output logic [$clog2(TN)-1:0]     dp_mac_col,
@@ -98,31 +98,32 @@ module accel_ctrl #(
         NZ_PHASE_0,
         NZ_PHASE_1,
         NZ_PHASE_2,
-        NZ_PHASE_3
+        NZ_PHASE_3,   // B read
+        NZ_PHASE_4    // B write into B_seg (using ram_rdata from previous cycle)
     } nz_phase_t;
 
     state_t      present_state, next_state;
     row_phase_t  present_row_phase, next_row_phase;
     nz_phase_t   present_nz_phase,  next_nz_phase;
 
-    // High-level flags 
+    // High-level flags
     logic busy_reg, busy_reg_next;
     logic done_reg, done_reg_next;
 
     // Tiling / loops
-    logic [$clog2(32)-1:0]    j0, j0_next;          // tile start col; width as needed
-    logic [$clog2(M_MAX)-1:0] i, i_next;
-    logic [$clog2(M_MAX)-1:0] i_clear, i_clear_next;
-    logic [$clog2(TN)-1:0]    t_clear, t_clear_next;
-    logic [$clog2(TN)-1:0]    t_mac, t_mac_next;
-    logic [$clog2(M_MAX)-1:0] i_wb, i_wb_next;
-    logic [$clog2(TN)-1:0]    t_wb, t_wb_next;
+    logic [31:0]                j0, j0_next;          // tile start col
+    logic [$clog2(M_MAX)-1:0]    i, i_next;
+    logic [$clog2(M_MAX)-1:0]    i_clear, i_clear_next;
+    logic [$clog2(TN)-1:0]       t_clear, t_clear_next;
+    logic [$clog2(TN)-1:0]       t_mac, t_mac_next;
+    logic [$clog2(M_MAX)-1:0]    i_wb, i_wb_next;
+    logic [$clog2(TN)-1:0]       t_wb, t_wb_next;
 
     // CSR indices
     logic [31:0] p_start, p_start_next;
     logic [31:0] p_end,   p_end_next;
     logic [31:0] p,       p_next;
-    
+
     // Current NZ (k, a)
     logic [31:0]           k_reg, k_reg_next;
     logic [DATA_WIDTH-1:0] a_reg, a_reg_next;
@@ -131,11 +132,25 @@ module accel_ctrl #(
     logic [$clog2(TN)-1:0] b_idx, b_idx_next;
     logic                  b_seg_ready, b_seg_ready_next;
 
-    
-    always_ff @(posedge clk or negedge n_reset) 
+    // Address scaling: byte addressed RAM, 32-bit words => shift by 2
+    localparam int WORD_BYTES = (DATA_WIDTH/8);
+    localparam int ADDR_SHIFT = $clog2(WORD_BYTES);
+
+    function automatic logic [ADDR_WIDTH-1:0] idx_to_byte_addr(input logic [ADDR_WIDTH-1:0] base,
+                                                               input logic [31:0] idx);
+        idx_to_byte_addr = base + (logic [ADDR_WIDTH-1:0])(idx << ADDR_SHIFT);
+    endfunction
+
+    function automatic logic [ADDR_WIDTH-1:0] idx2_to_byte_addr(input logic [ADDR_WIDTH-1:0] base,
+                                                                input logic [31:0] idx);
+        idx2_to_byte_addr = base + (logic [ADDR_WIDTH-1:0])(idx << ADDR_SHIFT);
+    endfunction
+
+
+    always_ff @(posedge clk or negedge n_reset)
     begin : SEQ
         if(!n_reset)
-        begin 
+        begin
             present_state     <= IDLE;
             present_row_phase <= ROW_PHASE_0;
             present_nz_phase  <= NZ_PHASE_0;
@@ -150,7 +165,7 @@ module accel_ctrl #(
             t_mac             <= '0;
             i_wb              <= '0;
             t_wb              <= '0;
-            
+
             p_start           <= '0;
             p_end             <= '0;
             p                 <= '0;
@@ -192,7 +207,6 @@ module accel_ctrl #(
     end
 
     // Combinational part of the fsm machine
-
     always_comb
     begin : COM
         next_state       = present_state;
@@ -232,7 +246,7 @@ module accel_ctrl #(
 
         dp_bseg_we       = 1'b0;
         dp_bseg_idx      = b_idx;
-        dp_bseg_wdata    = ram_rdata;
+        dp_bseg_wdata    = '0;
 
         dp_mac_en        = 1'b0;
         dp_mac_row       = i;
@@ -257,7 +271,7 @@ module accel_ctrl #(
             IDLE:  begin
                 if (start_pulse && !busy_reg)
                 begin
-                    if (M_reg == 0 || N_reg == 0) 
+                    if (M_reg == 0 || N_reg == 0)
                     begin
                         done_reg_next = 1'b1;
                         next_state    = DONE;
@@ -295,22 +309,22 @@ module accel_ctrl #(
                 end
             end
 
-            ROW_LOAD: begin                 
+            ROW_LOAD: begin
                 case (present_row_phase)
                     ROW_PHASE_0: begin                           // load the p_start value from the rowptr memory
-                        ram_addr        = rowptr_base_reg + i;
+                        ram_addr        = idx2_to_byte_addr(rowptr_base_reg, i);
                         ram_re          = 1'b1;
                         next_row_phase  = ROW_PHASE_1;
                     end
 
                     ROW_PHASE_1: begin
-                        p_start_next    = ram_rdata;               //save the p_start value for this row 
-                        ram_addr        = rowptr_base_reg + i + 1; //load the p_end index from the row ptr memory
+                        p_start_next    = ram_rdata;               //save the p_start value for this row
+                        ram_addr        = idx_to_byte_addr(rowptr_base_reg, (i + 1)); //load the p_end index from the row ptr memory
                         ram_re          = 1'b1;
                         next_row_phase  = ROW_PHASE_2;
                     end
 
-                    ROW_PHASE_2: begin                             // save the p_end value for this row 
+                    ROW_PHASE_2: begin                             // save the p_end value for this row
                         p_end_next      = ram_rdata;               // if row empty move to next_row
                         next_row_phase  = ROW_PHASE_0;             // if row not empty the let's fetch the non-zero's
 
@@ -326,17 +340,17 @@ module accel_ctrl #(
                 endcase
             end
 
-            NZ_FETCH: 
+            NZ_FETCH:
             begin
-                case (present_nz_phase)                            //    Read column idx "p" from memory location  
-                    NZ_PHASE_0: begin                              
-                        ram_addr      = colidx_base_reg + p;
+                case (present_nz_phase)                            //    Read column idx "p" from memory location
+                    NZ_PHASE_0: begin
+                        ram_addr      = idx_to_byte_addr(colidx_base_reg, p);
                         ram_re        = 1'b1;
                         next_nz_phase = NZ_PHASE_1;
                     end
                     NZ_PHASE_1: begin                               //.  store column idx value in k register
                         k_reg_next    = ram_rdata;                  //.  then load value idx p from memory location
-                        ram_addr      = val_base_reg + p;
+                        ram_addr      = idx_to_byte_addr(val_base_reg, p);
                         ram_re        = 1'b1;
                         next_nz_phase = NZ_PHASE_2;
                     end
@@ -346,31 +360,40 @@ module accel_ctrl #(
                         b_seg_ready_next  = 1'b0;
                         next_nz_phase     = NZ_PHASE_3;
                     end
-                    NZ_PHASE_3: begin                                                  
-                        ram_addr      = B_base_reg + k_reg * N_reg + (j0 + b_idx);  //load b row to work on from memory
-                        ram_re        = 1'b1;                                       // into B_seg
 
+                    // SYNC RAM: first issue B read
+                    NZ_PHASE_3: begin
+                        ram_addr      = idx_to_byte_addr(
+                                            B_base_reg,
+                                            (k_reg * N_reg) + (j0 + b_idx)
+                                        );  //load b row to work on from memory
+                        ram_re        = 1'b1;
+                        next_nz_phase = NZ_PHASE_4;
+                    end
+
+                    // Next cycle: ram_rdata valid -> write into B_Seg
+                    NZ_PHASE_4: begin
                         dp_bseg_we    = 1'b1;
                         dp_bseg_idx   = b_idx;
                         dp_bseg_wdata = ram_rdata;
-  
+
                         if (b_idx == TN-1) begin                       // if b_idx is = last element in tile
-                            b_idx_next       = b_idx;                  // go to the mac state 
+                            b_idx_next       = b_idx;
                             b_seg_ready_next = 1'b1;
                             t_mac_next       = '0;
                             next_nz_phase    = NZ_PHASE_0;
                             next_state       = MAC;
-                        end                                            // keep looping though row B till  at the end of it's tile segment             
-                        else begin                                                                          
-                            b_idx_next = b_idx + 1;
+                        end
+                        else begin
+                            b_idx_next       = b_idx + 1;
+                            next_nz_phase    = NZ_PHASE_3;             // go read next B element
                         end
                     end
 
                 endcase
             end
 
-
-            MAC: 
+            MAC:
             begin                                                      // give datapath the stuff it needs
                 dp_mac_en  = 1'b1;
                 dp_mac_row = i;
@@ -394,7 +417,7 @@ module accel_ctrl #(
                 end
             end
 
-            NEXT_ROW: 
+            NEXT_ROW:
             begin
                 if (i + 1 < M_reg) begin                               //if more rows are left the go back to ROW_LOAD
                     i_next     = i + 1;
@@ -407,7 +430,7 @@ module accel_ctrl #(
                 end
             end
 
-            WRITE_TILE:                                                
+            WRITE_TILE:
             begin                                                          //configure datapath to write row i, column t of tile c
                 dp_ctile_read_en  = 1'b1;                                  //back to memory
                 dp_ctile_read_row = i_wb;
@@ -416,12 +439,15 @@ module accel_ctrl #(
                 dp_wb_en          = 1'b1;                                   // enable writeback to pipeline for further processing of c
                 dp_wb_in          = dp_ctile_read_data;                     // this takes the value of c into the pipe to then produce "dp_wb_data_out"
 
-                ram_addr  = out_base_reg + i_wb * N_reg + (j0 + t_wb);     // storage address
+                ram_addr  = idx_to_byte_addr(
+                                out_base_reg,
+                                (i_wb * N_reg) + (j0 + t_wb)
+                            );                                             // storage address
                 ram_we    = 1'b1;                                          // enable write to ram
                 ram_wdata = dp_wb_data_out;                                // final output to store after Relu or other post processsing on output
 
                 if (t_wb == TN-1) begin                                    //if we're done writing all the columns then set back to 0
-                    t_wb_next = '0;                                     
+                    t_wb_next = '0;
 
                     if (i_wb == M_reg - 1) begin                           //if we're done writing all the rows but we still have more tiles
                         if (j0 + TN < N_reg) begin                         //then move j0 to start of next tile and go to TILE_CLEAR
@@ -431,7 +457,7 @@ module accel_ctrl #(
                             next_state   = INIT_TILE_CLEAR;
                         end
                         else begin                                         //if we've done all tiles for B and c then do to DONE
-                            next_state = DONE;                             
+                            next_state = DONE;
                         end
                     end
                     else begin
@@ -447,12 +473,12 @@ module accel_ctrl #(
                 busy_reg_next = 1'b0;
                 done_reg_next = 1'b1;
 
-                if (clear_pulse) 
+                if (clear_pulse)
                 begin
                     done_reg_next  = 1'b0;
                     next_state     = IDLE;
                 end
-                end
+            end
 
         endcase
     end

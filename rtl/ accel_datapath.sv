@@ -1,4 +1,4 @@
- //This datapath module is responsible for the multiply and accumulate functionality
+//This datapath module is responsible for the multiply and accumulate functionality
 // of the fsm. it get's data and control from accel_ctrl module
 
 module accel_datapath #(
@@ -39,7 +39,7 @@ module accel_datapath #(
     output logic [DATA_WIDTH-1:0]    wb_data_out
 );
 
-    // Local buffers (signed so negative values work correctly)
+    // Local buffers (signed so negatives work correctly)
     logic signed [DATA_WIDTH-1:0] B_Seg  [TN-1:0];
     logic signed [DATA_WIDTH-1:0] C_Tile [M_MAX-1:0][TN-1:0];
 
@@ -47,7 +47,6 @@ module accel_datapath #(
 
     always_ff @(posedge clk or negedge n_reset) begin
         if (!n_reset) begin
-            // Reset local buffers to 0
             for (c = 0; c < TN; c++) begin
                 B_Seg[c] <= '0;
             end
@@ -58,7 +57,6 @@ module accel_datapath #(
             end
         end else begin
             // ctile clear when clear_en is active
-            // (clears ONE element per cycle; ctrl should iterate clear_row/clear_col)
             if (clear_en) begin
                 C_Tile[clear_row][clear_col] <= '0;
             end
@@ -69,7 +67,6 @@ module accel_datapath #(
             end
 
             // multiply and accumulate logic
-            // (simple readable form; truncates to DATA_WIDTH)
             if (mac_en) begin
                 C_Tile[mac_row][mac_col] <=
                     $signed(C_Tile[mac_row][mac_col]) +
@@ -88,7 +85,7 @@ module accel_datapath #(
 
     // processing of relu on wb_in
     always_comb begin
-        wb_data_out = wb_in;  // default if relu no enabled.
+        wb_data_out = wb_in;  // default passthrough
         if (wb_en && relu_en) begin
             if ($signed(wb_in) < 0)
                 wb_data_out = '0;
