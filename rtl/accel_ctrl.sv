@@ -138,12 +138,12 @@ module accel_ctrl #(
 
     function automatic logic [ADDR_WIDTH-1:0] idx_to_byte_addr(input logic [ADDR_WIDTH-1:0] base,
                                                                input logic [31:0] idx);
-        idx_to_byte_addr = base + (logic [ADDR_WIDTH-1:0])(idx << ADDR_SHIFT);
+        idx_to_byte_addr = base + ADDR_WIDTH'(idx << ADDR_SHIFT);
     endfunction
 
     function automatic logic [ADDR_WIDTH-1:0] idx2_to_byte_addr(input logic [ADDR_WIDTH-1:0] base,
                                                                 input logic [31:0] idx);
-        idx2_to_byte_addr = base + (logic [ADDR_WIDTH-1:0])(idx << ADDR_SHIFT);
+        idx2_to_byte_addr = base + ADDR_WIDTH'(idx << ADDR_SHIFT);
     endfunction
 
 
@@ -337,6 +337,10 @@ module accel_ctrl #(
                             next_state    = NZ_FETCH;
                         end
                     end
+
+                    default: begin
+                        next_row_phase = ROW_PHASE_0;
+                    end
                 endcase
             end
 
@@ -390,6 +394,9 @@ module accel_ctrl #(
                         end
                     end
 
+                    default: begin
+                        next_nz_phase = NZ_PHASE_0;
+                    end
                 endcase
             end
 
