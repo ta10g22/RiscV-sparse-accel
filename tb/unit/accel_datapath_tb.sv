@@ -11,6 +11,7 @@
 //   run -all
 
 `timescale 1ns/1ps
+`include "tb/common/tb_macros.svh"
 
 module accel_datapath_tb;
 

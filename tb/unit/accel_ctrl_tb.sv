@@ -9,6 +9,7 @@
 //   run -all
 
 `timescale 1ns/1ps
+`include "tb/common/tb_macros.svh"
 
 // ------------------------------------------------------------
 // 1) RAM model module (SYNC read: rdata valid 1 cycle after re)
