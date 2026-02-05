@@ -4,7 +4,8 @@
 # ============================================================
 # Toolchain Configuration
 # ============================================================
-CROSS_PREFIX ?= riscv32-unknown-elf-
+# Use riscv64 toolchain (can compile RV32 with -march=rv32im)
+CROSS_PREFIX ?= riscv64-unknown-elf-
 CC      = $(CROSS_PREFIX)gcc
 OBJCOPY = $(CROSS_PREFIX)objcopy
 OBJDUMP = $(CROSS_PREFIX)objdump
@@ -31,7 +32,7 @@ LDFLAGS += -Wl,--gc-sections     # Remove unused sections
 # ============================================================
 # Source Files
 # ============================================================
-SRCS = start.S spmm_accel.c main.c
+SRCS = start.S libc_stubs.c spmm_accel.c main.c
 OBJS = $(SRCS:.c=.o)
 OBJS := $(OBJS:.S=.o)
 
@@ -63,5 +64,13 @@ $(TARGET).bin: $(TARGET).elf
 dump: $(TARGET).elf
 	$(OBJDUMP) -d -S $< > $(TARGET).dump
 
+# Generate MIF for Quartus synthesis
+$(TARGET).mif: $(TARGET).hex
+	python3 hex2mif.py $< $@
+
+# Copy MIF to Quartus project directory
+install-mif: $(TARGET).mif
+	cp $< ../../fpga/quartus/
+
 clean:
-	rm -f *.o $(TARGET).elf $(TARGET).hex $(TARGET).bin $(TARGET).dump
+	rm -f *.o $(TARGET).elf $(TARGET).hex $(TARGET).bin $(TARGET).dump $(TARGET).mif

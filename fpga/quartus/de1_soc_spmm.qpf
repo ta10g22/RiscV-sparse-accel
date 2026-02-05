@@ -1,0 +1,9 @@
+# ============================================================
+# Quartus Project File - DE1-SoC SpMM Accelerator
+# ============================================================
+# Target: DE1-SoC (Cyclone V 5CSEMA5F31C6)
+# ============================================================
+
+QUARTUS_VERSION = "20.1"
+PROJECT_REVISION = "de1_soc_spmm"
+
