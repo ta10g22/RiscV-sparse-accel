@@ -53,7 +53,7 @@ module ram_model_sync #(
     end
   end
 
-  // Sync read: capture addr on re, drive rdata next cycle
+  // Sync read: 1-cycle latency - data valid on cycle after re
   always_ff @(posedge clk) begin
     if (!n_reset) begin
       re_d   <= 1'b0;
@@ -63,16 +63,16 @@ module ram_model_sync #(
       re_d   <= re;
       addr_d <= addr;
 
-      if (re_d) begin
-        if (addr_d[1:0] !== 2'b00) begin
-          $error("[RAM] Unaligned READ addr=0x%08x @t=%0t", addr_d, $time);
+      if (re) begin
+        if (addr[1:0] !== 2'b00) begin
+          $error("[RAM] Unaligned READ addr=0x%08x @t=%0t", addr, $time);
           rdata <= '0;
-        end else if (addr_to_word_idx(addr_d) >= WORDS) begin
+        end else if (addr_to_word_idx(addr) >= WORDS) begin
           $error("[RAM] OOB READ addr=0x%08x (word_idx=%0d) @t=%0t",
-                 addr_d, addr_to_word_idx(addr_d), $time);
+                 addr, addr_to_word_idx(addr), $time);
           rdata <= '0;
         end else begin
-          rdata <= mem[addr_to_word_idx(addr_d)];
+          rdata <= mem[addr_to_word_idx(addr)];
         end
       end
     end
