@@ -262,9 +262,9 @@ module accel_top_tb;
     drive_mmio_defaults();
     ram_clear();
 
-    // Configure: 2x2 matrix with 0 non-zeros
+    // Configure: 2x8 matrix with 0 non-zeros (N=8 to match TN)
     mmio_write(M_OFFSET, 32'd2);
-    mmio_write(N_OFFSET, 32'd2);
+    mmio_write(N_OFFSET, 32'd8);
     mmio_write(K_OFFSET, 32'd2);
     mmio_write(NNZ_OFFSET, 32'd0);
 
@@ -304,57 +304,57 @@ module accel_top_tb;
   endtask
 
   // ============================================================
-  // Test: Simple 2x2 SpMM
+  // Test: Simple 2x8 SpMM (N must be >= TN=8 for proper tiling)
   // ============================================================
   task automatic test_simple_spmm();
     logic [31:0] status, c_val;
+    int i;
 
-    // A (CSR) = | 2  0 |  -> rowptr = [0, 1, 2]
-    //           | 0  3 |     colidx = [0, 1]
-    //                        values = [2, 3]
+    // A (CSR) 2x2 sparse = | 2  0 |  -> rowptr = [0, 1, 2]
+    //                      | 0  3 |     colidx = [0, 1]
+    //                                   values = [2, 3]
     //
-    // B = | 4  5 |
-    //     | 6  7 |
+    // B 2x8 dense (row-major), first 2 cols have data:
+    // B = | 4  5  0  0  0  0  0  0 |
+    //     | 6  7  0  0  0  0  0  0 |
     //
-    // C = A * B = | 8  10 |
-    //             | 18 21 |
+    // C = A * B (2x8):
+    // C[0,:] = 2 * B[0,:] = | 8  10  0  0  0  0  0  0 |
+    // C[1,:] = 3 * B[1,:] = | 18 21  0  0  0  0  0  0 |
 
     $display("[TEST] test_simple_spmm");
     u_cr.apply_reset();
     drive_mmio_defaults();
     ram_clear();
 
-    // Memory layout (word addresses):
-    // rowptr @ 0x100: [0, 1, 2]
-    // colidx @ 0x200: [0, 1]
-    // values @ 0x300: [2, 3]
-    // B @ 0x400: row-major [4, 5, 6, 7]
-    // C @ 0x800: output
+    // Row pointers (M+1 = 3 entries)
+    ram_poke(32'h100 >> 2, 32'd0);  // row 0 starts at NZ index 0
+    ram_poke(32'h104 >> 2, 32'd1);  // row 1 starts at NZ index 1
+    ram_poke(32'h108 >> 2, 32'd2);  // end (2 NZ total)
 
-    // Row pointers
-    ram_poke(32'h100 >> 2, 32'd0);
-    ram_poke(32'h104 >> 2, 32'd1);
-    ram_poke(32'h108 >> 2, 32'd2);
+    // Column indices (2 NZ)
+    ram_poke(32'h200 >> 2, 32'd0);  // NZ 0: A[0,0]
+    ram_poke(32'h204 >> 2, 32'd1);  // NZ 1: A[1,1]
 
-    // Column indices
-    ram_poke(32'h200 >> 2, 32'd0);  // A[0,0]
-    ram_poke(32'h204 >> 2, 32'd1);  // A[1,1]
-
-    // Values
+    // Values (2 NZ)
     ram_poke(32'h300 >> 2, 32'd2);  // A[0,0] = 2
     ram_poke(32'h304 >> 2, 32'd3);  // A[1,1] = 3
 
-    // B matrix (row-major)
-    ram_poke(32'h400 >> 2, 32'd4);  // B[0,0]
-    ram_poke(32'h404 >> 2, 32'd5);  // B[0,1]
-    ram_poke(32'h408 >> 2, 32'd6);  // B[1,0]
-    ram_poke(32'h40C >> 2, 32'd7);  // B[1,1]
+    // B matrix 2x8 (row-major): B[row][col] at B_base + (row*N + col)*4
+    // Row 0: [4, 5, 0, 0, 0, 0, 0, 0]
+    ram_poke((32'h400 >> 2) + 0, 32'd4);   // B[0,0]
+    ram_poke((32'h400 >> 2) + 1, 32'd5);   // B[0,1]
+    for (i = 2; i < 8; i++) ram_poke((32'h400 >> 2) + i, 32'd0);
+    // Row 1: [6, 7, 0, 0, 0, 0, 0, 0]
+    ram_poke((32'h400 >> 2) + 8, 32'd6);   // B[1,0]
+    ram_poke((32'h400 >> 2) + 9, 32'd7);   // B[1,1]
+    for (i = 2; i < 8; i++) ram_poke((32'h400 >> 2) + 8 + i, 32'd0);
 
     // Configure accelerator
-    mmio_write(M_OFFSET, 32'd2);
-    mmio_write(N_OFFSET, 32'd2);
-    mmio_write(K_OFFSET, 32'd2);
-    mmio_write(NNZ_OFFSET, 32'd2);
+    mmio_write(M_OFFSET, 32'd2);      // 2 rows in A and C
+    mmio_write(N_OFFSET, 32'd8);      // 8 cols in B and C (must be >= TN)
+    mmio_write(K_OFFSET, 32'd2);      // 2 cols in A, 2 rows in B
+    mmio_write(NNZ_OFFSET, 32'd2);    // 2 non-zeros in A
 
     mmio_write(A_ROW_BASE_OFFSET, 32'h0000_0100);
     mmio_write(A_COL_BASE_OFFSET, 32'h0000_0200);
@@ -371,17 +371,21 @@ module accel_top_tb;
     // Wait for done
     wait_done(100000);
 
-    // Read results from RAM
-    c_val = ram_peek(32'h800 >> 2);  // C[0,0]
+    // Read results from RAM: C is 2x8, row-major at 0x800
+    // C[row][col] at C_base + (row*N + col)*4
+
+    // Row 0: C[0,:] = 2 * B[0,:] = [8, 10, 0, 0, 0, 0, 0, 0]
+    c_val = ram_peek((32'h800 >> 2) + 0);  // C[0,0]
     `TB_CHECK(c_val == 32'd8, $sformatf("C[0,0] wrong: got %0d, exp 8", c_val))
 
-    c_val = ram_peek(32'h804 >> 2);  // C[0,1]
+    c_val = ram_peek((32'h800 >> 2) + 1);  // C[0,1]
     `TB_CHECK(c_val == 32'd10, $sformatf("C[0,1] wrong: got %0d, exp 10", c_val))
 
-    c_val = ram_peek(32'h808 >> 2);  // C[1,0]
+    // Row 1: C[1,:] = 3 * B[1,:] = [18, 21, 0, 0, 0, 0, 0, 0]
+    c_val = ram_peek((32'h800 >> 2) + 8);  // C[1,0] (row 1, col 0 = offset 1*8+0 = 8)
     `TB_CHECK(c_val == 32'd18, $sformatf("C[1,0] wrong: got %0d, exp 18", c_val))
 
-    c_val = ram_peek(32'h80C >> 2);  // C[1,1]
+    c_val = ram_peek((32'h800 >> 2) + 9);  // C[1,1]
     `TB_CHECK(c_val == 32'd21, $sformatf("C[1,1] wrong: got %0d, exp 21", c_val))
 
     $display("[PASS] test_simple_spmm");
@@ -393,31 +397,32 @@ module accel_top_tb;
   task automatic test_relu_activation();
     logic [31:0] status, c_val;
 
-    // A = | -2 |  -> will produce negative output
-    // B = | 5  |
-    // C = A * B = | -10 | -> with ReLU = | 0 |
+    // A = | -2 |  (1x1 sparse, but N must be >= TN=8)
+    // B = | 5  0  0  0  0  0  0  0 |  (1x8)
+    // C = A * B = | -10 ... | -> with ReLU = | 0 ... |
 
     $display("[TEST] test_relu_activation");
     u_cr.apply_reset();
     drive_mmio_defaults();
     ram_clear();
 
-    // Row pointers
-    ram_poke(32'h100 >> 2, 32'd0);
-    ram_poke(32'h104 >> 2, 32'd1);
+    // Row pointers (M=1, so 2 entries)
+    ram_poke(32'h100 >> 2, 32'd0);  // row 0 starts at 0
+    ram_poke(32'h104 >> 2, 32'd1);  // end
 
     // Column indices
-    ram_poke(32'h200 >> 2, 32'd0);
+    ram_poke(32'h200 >> 2, 32'd0);  // NZ at A[0,0]
 
     // Values: -2 in two's complement
     ram_poke(32'h300 >> 2, 32'hFFFF_FFFE);
 
-    // B matrix
+    // B matrix (1x8): only first element is 5
     ram_poke(32'h400 >> 2, 32'd5);
+    // Rest are 0 (already cleared)
 
-    // Configure
+    // Configure (N=8 to match TN)
     mmio_write(M_OFFSET, 32'd1);
-    mmio_write(N_OFFSET, 32'd1);
+    mmio_write(N_OFFSET, 32'd8);
     mmio_write(K_OFFSET, 32'd1);
     mmio_write(NNZ_OFFSET, 32'd1);
 
@@ -454,9 +459,9 @@ module accel_top_tb;
     drive_mmio_defaults();
     ram_clear();
 
-    // Setup small matrix
+    // Setup small matrix (N=8 to match TN)
     mmio_write(M_OFFSET, 32'd1);
-    mmio_write(N_OFFSET, 32'd1);
+    mmio_write(N_OFFSET, 32'd8);
     mmio_write(K_OFFSET, 32'd1);
     mmio_write(NNZ_OFFSET, 32'd0);
 
