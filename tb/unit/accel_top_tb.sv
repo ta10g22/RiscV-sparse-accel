@@ -74,7 +74,7 @@ module accel_top_tb;
   logic                    irq;
 
   // ============================================================
-  // RAM model (same as in accel_ctrl_tb)
+  // RAM model - 1-cycle read latency (data valid cycle after re)
   // ============================================================
   localparam int RAM_WORDS = 16384;
   logic [DATA_WIDTH-1:0] ram_mem [0:RAM_WORDS-1];
@@ -96,11 +96,11 @@ module accel_top_tb;
       if (ram_we) begin
         ram_mem[addr_to_word(ram_addr)] <= ram_wdata;
       end
-      // Sync read
+      // Sync read: capture address when re is high, output data next cycle
       ram_re_d   <= ram_re;
       ram_addr_d <= ram_addr;
-      if (ram_re_d) begin
-        ram_rdata <= ram_mem[addr_to_word(ram_addr_d)];
+      if (ram_re) begin
+        ram_rdata <= ram_mem[addr_to_word(ram_addr)];
       end
     end
   end
