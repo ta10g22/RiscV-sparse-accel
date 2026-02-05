@@ -1,3 +1,5 @@
+`timescale 1ns/1ps
+
 //This datapath module is responsible for the multiply and accumulate functionality
 // of the fsm. it get's data and control from accel_ctrl module
 

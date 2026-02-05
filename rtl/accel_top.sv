@@ -1,3 +1,5 @@
+`timescale 1ns/1ps
+
 // top level of the accelerator responsible for the inputs and outputs and
 // connections throughout the accelerator
 

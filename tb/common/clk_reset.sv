@@ -1,3 +1,5 @@
+`timescale 1ns/1ps
+
 module clk_reset #(
   parameter time TCLK = 10ns
 )(

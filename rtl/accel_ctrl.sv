@@ -1,3 +1,5 @@
+`timescale 1ns/1ps
+
 //this is the control functionality of the SpMM accelerator
 //it works with accel_datapath for full functionality
 
