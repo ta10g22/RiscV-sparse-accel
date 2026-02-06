@@ -198,19 +198,9 @@ module soc_top #(
   // On-Chip RAM (64KB)
   // ============================================================
   // Dual-port: Port A for CPU, Port B for Accelerator
-  logic [31:0] ram [0:RAM_SIZE/4-1];
+  // Use Quartus synthesis attribute to initialize from MIF file
+  (* ram_init_file = "firmware.mif" *) logic [31:0] ram [0:RAM_SIZE/4-1];
   logic        ram_read_pending;
-  
-  // Initialize RAM from MIF file
-  // Note: For Quartus synthesis, use MEM_INIT parameter with .mif file
-  // Uninitialized RAM defaults to 0 in Cyclone V M10K blocks
-  generate
-    if (MEM_INIT != "") begin : gen_ram_init
-      initial begin
-        $readmemh(MEM_INIT, ram);
-      end
-    end
-  endgenerate
   
   // Port A: CPU access
   always_ff @(posedge clk) begin
