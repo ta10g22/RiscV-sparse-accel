@@ -201,17 +201,16 @@ module soc_top #(
   logic [31:0] ram [0:RAM_SIZE/4-1];
   logic        ram_read_pending;
   
-  // Initialize RAM from MIF file if specified
-  initial begin
-    if (MEM_INIT != "") begin
-      $readmemh(MEM_INIT, ram);
-    end else begin
-      // Default: clear RAM
-      for (int i = 0; i < RAM_SIZE/4; i++) begin
-        ram[i] = 32'h0;
+  // Initialize RAM from MIF file
+  // Note: For Quartus synthesis, use MEM_INIT parameter with .mif file
+  // Uninitialized RAM defaults to 0 in Cyclone V M10K blocks
+  generate
+    if (MEM_INIT != "") begin : gen_ram_init
+      initial begin
+        $readmemh(MEM_INIT, ram);
       end
     end
-  end
+  endgenerate
   
   // Port A: CPU access
   always_ff @(posedge clk) begin
