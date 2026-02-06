@@ -54,6 +54,11 @@ def parse_raw_hex(filename):
             if not line or line.startswith('#') or line.startswith('//'):
                 continue
             
+            # Check for address directive
+            if line.startswith('@'):
+                addr = int(line[1:], 16) * 4  # Convert word address to byte address
+                continue
+            
             try:
                 word = int(line, 16)
                 # Store as little-endian bytes
