@@ -48,21 +48,38 @@ static const uint8_t seg7_table[16] = {
     0x0E  // F
 };
 
-// Display two hex digits on HEX1:HEX0
-void display_hex(uint8_t value) {
-    uint8_t lo = seg7_table[value & 0xF];
-    uint8_t hi = seg7_table[(value >> 4) & 0xF];
-    GPIO_OUT = (hi << 8) | lo;
+// Display 6 hex digits on HEX5:HEX0
+// Format: HEX5:HEX4 = CPU cycles (÷64), HEX3:HEX2 = Accel cycles, HEX1:HEX0 = Speedup
+void display_results(uint32_t cpu_cycles, uint32_t accel_cycles, uint32_t speedup) {
+    // Divide CPU cycles by 64 to fit in 2 hex digits (0-255 represents 0-16320)
+    uint32_t cpu_scaled = cpu_cycles >> 6;  // ÷64
+    if (cpu_scaled > 255) cpu_scaled = 255;
+    
+    // Accel cycles - cap at 255
+    if (accel_cycles > 255) accel_cycles = 255;
+    
+    // Speedup - cap at 99
+    if (speedup > 99) speedup = 99;
+    uint8_t sp_tens = speedup / 10;
+    uint8_t sp_ones = speedup % 10;
+    
+    // Pack into GPIO_OUT: bits [23:0] for 6 hex digits
+    // HEX0 = [3:0], HEX1 = [7:4], HEX2 = [11:8], HEX3 = [15:12], HEX4 = [19:16], HEX5 = [23:20]
+    uint32_t val = 0;
+    val |= (sp_ones & 0xF);         // HEX0 = speedup ones
+    val |= (sp_tens & 0xF) << 4;    // HEX1 = speedup tens
+    val |= (accel_cycles & 0xF) << 8;       // HEX2 = accel low nibble
+    val |= ((accel_cycles >> 4) & 0xF) << 12; // HEX3 = accel high nibble
+    val |= (cpu_scaled & 0xF) << 16;        // HEX4 = cpu low nibble
+    val |= ((cpu_scaled >> 4) & 0xF) << 20; // HEX5 = cpu high nibble
+    
+    GPIO_OUT = val;
 }
 
-// Display speedup ratio (0-99)
-void display_speedup(uint32_t speedup) {
-    if (speedup > 99) speedup = 99;
-    uint8_t tens = speedup / 10;
-    uint8_t ones = speedup % 10;
-    uint8_t lo = seg7_table[ones];
-    uint8_t hi = seg7_table[tens];
-    GPIO_OUT = (hi << 8) | lo | (0x3F << 16); // LEDs show pattern
+// Display error code
+void display_error(uint8_t code) {
+    // Show "EE" on HEX1:HEX0
+    GPIO_OUT = (0xE << 4) | 0xE | (code << 8);
 }
 
 // ============================================================
@@ -150,8 +167,8 @@ int main(void)
     uint32_t cpu_cycles, accel_cycles;
     uint32_t speedup;
     
-    // Show "88" while running (all segments on)
-    GPIO_OUT = 0x0000;
+    // Show "888888" while running (all segments on)
+    GPIO_OUT = 0x888888;
     
     // ========================================
     // Benchmark 1: CPU Software SpMM
@@ -187,12 +204,12 @@ int main(void)
     // ========================================
     if (array_compare(C_cpu, C_accel, TEST_M * TEST_N) != 0) {
         // ERROR: Results don't match!
-        display_hex(0xEE);  // Show "EE" for error
+        display_error(0x01);
         while(1);  // Halt
     }
     
     // ========================================
-    // Calculate and display speedup
+    // Calculate and display results
     // ========================================
     // Speedup = CPU_cycles / Accel_cycles
     if (accel_cycles > 0) {
@@ -201,24 +218,11 @@ int main(void)
         speedup = 99;  // Max displayable
     }
     
-    // Display speedup on 7-segment (e.g., "05" = 5x faster)
-    display_speedup(speedup);
-    
-    // Also set LEDs to show cycle count ranges:
-    // LED[0] = accel < 100 cycles
-    // LED[1] = accel < 500 cycles
-    // LED[2] = accel < 1000 cycles
-    // LED[3] = cpu > 1000 cycles
-    // LED[4] = cpu > 5000 cycles
-    // LED[5] = verification passed
-    uint32_t led_pattern = 0x20;  // LED[5] = pass
-    if (accel_cycles < 100)  led_pattern |= 0x01;
-    if (accel_cycles < 500)  led_pattern |= 0x02;
-    if (accel_cycles < 1000) led_pattern |= 0x04;
-    if (cpu_cycles > 1000)   led_pattern |= 0x08;
-    if (cpu_cycles > 5000)   led_pattern |= 0x10;
-    
-    GPIO_OUT = (GPIO_OUT & 0xFFFF) | (led_pattern << 16);
+    // Display on all 6 seven-segment displays:
+    // HEX5:HEX4 = CPU cycles (÷64, in hex)
+    // HEX3:HEX2 = Accel cycles (in hex)  
+    // HEX1:HEX0 = Speedup (in decimal, e.g. "05" = 5x)
+    display_results(cpu_cycles, accel_cycles, speedup);
     
     // Infinite loop - display stays on
     while(1);

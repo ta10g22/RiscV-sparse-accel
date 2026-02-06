@@ -29,9 +29,13 @@ module soc_top #(
   // Note: KEY[0] is used for n_reset, so only KEY[3:1] available
   input  logic [3:1]  key,
   
-  // 7-Segment (directly usable)
+  // 7-Segment (directly usable) - active low
   output logic [6:0]  hex0,
   output logic [6:0]  hex1,
+  output logic [6:0]  hex2,
+  output logic [6:0]  hex3,
+  output logic [6:0]  hex4,
+  output logic [6:0]  hex5,
   
   // UART (directly usable GPIO)
   output logic        uart_tx,
@@ -382,6 +386,10 @@ module soc_top #(
   
   assign hex0 = hex_decode(gpio_out_reg[3:0]);
   assign hex1 = hex_decode(gpio_out_reg[7:4]);
+  assign hex2 = hex_decode(gpio_out_reg[11:8]);
+  assign hex3 = hex_decode(gpio_out_reg[15:12]);
+  assign hex4 = hex_decode(gpio_out_reg[19:16]);
+  assign hex5 = hex_decode(gpio_out_reg[23:20]);
   
   // UART - Placeholder for now, tie off
   assign uart_tx = 1'b1;  // Idle high
