@@ -55,8 +55,8 @@ $(TARGET).elf: $(OBJS) linker.ld
 %.o: %.S
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(TARGET).hex: $(TARGET).elf
-	$(OBJCOPY) -O verilog $< $@
+$(TARGET).hex: $(TARGET).bin
+	python3 bin2hex32.py $< $@
 
 $(TARGET).bin: $(TARGET).elf
 	$(OBJCOPY) -O binary $< $@
