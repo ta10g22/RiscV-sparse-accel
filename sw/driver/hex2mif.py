@@ -113,8 +113,15 @@ def bytes_to_words(data, depth):
     
     return words
 
-def write_mif(words, filename):
-    """Write Quartus MIF format file."""
+def write_mif(words, filename, width=32, byte_lane=None):
+    """Write Quartus MIF format file.
+    
+    Args:
+        words: List of word values
+        filename: Output filename
+        width: Data width in bits (32 for full words, 8 for byte lanes)
+        byte_lane: If not None, extract this byte lane (0-3) from each word
+    """
     depth = len(words)
     
     with open(filename, 'w') as f:
@@ -123,7 +130,7 @@ def write_mif(words, filename):
         f.write("--\n\n")
         
         f.write(f"DEPTH = {depth};\n")
-        f.write("WIDTH = 32;\n")
+        f.write(f"WIDTH = {width};\n")
         f.write("ADDRESS_RADIX = HEX;\n")
         f.write("DATA_RADIX = HEX;\n\n")
         
@@ -131,20 +138,31 @@ def write_mif(words, filename):
         
         # Find runs of zeros to compress output
         i = 0
+        if byte_lane is not None:
+            # Extract specific byte lane
+            fmt_width = 2  # 8-bit = 2 hex chars
+            shift = byte_lane * 8
+            mask = 0xFF
+        else:
+            fmt_width = 8  # 32-bit = 8 hex chars
+            shift = 0
+            mask = 0xFFFFFFFF
+        
         while i < depth:
-            if words[i] == 0:
+            val = (words[i] >> shift) & mask
+            if val == 0:
                 # Find run of zeros
                 j = i
-                while j < depth and words[j] == 0:
+                while j < depth and ((words[j] >> shift) & mask) == 0:
                     j += 1
                 
                 if j - i > 1:
-                    f.write(f"  [{i:04X}..{j-1:04X}] : 00000000;\n")
+                    f.write(f"  [{i:04X}..{j-1:04X}] : {0:0{fmt_width}X};\n")
                 else:
-                    f.write(f"  {i:04X} : 00000000;\n")
+                    f.write(f"  {i:04X} : {0:0{fmt_width}X};\n")
                 i = j
             else:
-                f.write(f"  {i:04X} : {words[i]:08X};\n")
+                f.write(f"  {i:04X} : {val:0{fmt_width}X};\n")
                 i += 1
         
         f.write("END;\n")
@@ -156,7 +174,18 @@ def main():
     
     input_file = sys.argv[1]
     output_file = sys.argv[2]
-    depth = int(sys.argv[3]) if len(sys.argv) > 3 else 16384
+    
+    # Check for --split-bytes flag
+    split_bytes = '--split-bytes' in sys.argv
+    
+    # Parse depth (skip flags)
+    depth = 16384
+    for arg in sys.argv[3:]:
+        if not arg.startswith('--'):
+            try:
+                depth = int(arg)
+            except ValueError:
+                pass
     
     # Detect input format
     with open(input_file, 'r') as f:
@@ -179,9 +208,17 @@ def main():
     non_zero = sum(1 for w in words if w != 0)
     print(f"Loaded {non_zero} non-zero words")
     
-    # Write MIF
-    write_mif(words, output_file)
-    print(f"Written: {output_file}")
+    if split_bytes:
+        # Generate 4 separate MIF files for byte lanes (Quartus Block RAM)
+        base_name = output_file.rsplit('.', 1)[0]
+        for lane in range(4):
+            lane_file = f"{base_name}{lane}.mif"
+            write_mif(words, lane_file, width=8, byte_lane=lane)
+            print(f"Written: {lane_file} (byte lane {lane})")
+    else:
+        # Single 32-bit MIF file
+        write_mif(words, output_file)
+        print(f"Written: {output_file}")
 
 if __name__ == "__main__":
     main()

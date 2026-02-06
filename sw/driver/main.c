@@ -12,9 +12,9 @@
 // ============================================================
 // GPIO for LED/7-Segment output
 // ============================================================
-#define GPIO_BASE   0x20000000
-#define GPIO_OUT    (*(volatile uint32_t *)(GPIO_BASE + 0x00))  // LEDs/7-seg
-#define GPIO_IN     (*(volatile uint32_t *)(GPIO_BASE + 0x04))  // Switches
+#define GPIO_BASE 0x20000000
+#define GPIO_OUT (*(volatile uint32_t *)(GPIO_BASE + 0x00)) // LEDs/7-seg
+#define GPIO_IN (*(volatile uint32_t *)(GPIO_BASE + 0x04))  // Switches
 
 // ============================================================
 // Test Data
@@ -153,16 +153,19 @@ int main(void)
     // ========================================
     // GPIO_OUT[5:0] -> LED[5:0]
     // GPIO_OUT[7:0] -> 7-seg display (HEX1:HEX0)
-    // 
+    //
     // 0x00 = PASS (displays "00", LEDs off)
     // 0x01 = basic test fail
     // 0x02 = ReLU test fail
     // 0xAA = running pattern (before tests)
-    
-    if (result == 0) {
-        GPIO_OUT = 0x00;  // All LEDs off, 7-seg shows "00" = PASS
-    } else {
-        GPIO_OUT = (result << 4) | 0x0F;  // Show error code, light some LEDs
+
+    if (result == 0)
+    {
+        GPIO_OUT = 0x00; // All LEDs off, 7-seg shows "00" = PASS
+    }
+    else
+    {
+        GPIO_OUT = (result << 4) | 0x0F; // Show error code, light some LEDs
     }
 
     // ========================================

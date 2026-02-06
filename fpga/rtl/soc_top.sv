@@ -198,43 +198,53 @@ module soc_top #(
   // ============================================================
   // Port A: CPU (read/write)
   // Port B: Accelerator (read/write)
-  // Quartus will infer M10K blocks with true dual-port mode
+  // Use 4 separate byte RAMs for proper M10K inference with byte enables
+  // Quartus cannot infer Block RAM with partial word writes on a single array
   
-  (* ram_init_file = "firmware.mif" *) logic [31:0] ram [0:RAM_SIZE/4-1];
+  (* ram_init_file = "firmware0.mif" *) logic [7:0] ram0 [0:RAM_SIZE/4-1];  // Byte 0
+  (* ram_init_file = "firmware1.mif" *) logic [7:0] ram1 [0:RAM_SIZE/4-1];  // Byte 1
+  (* ram_init_file = "firmware2.mif" *) logic [7:0] ram2 [0:RAM_SIZE/4-1];  // Byte 2
+  (* ram_init_file = "firmware3.mif" *) logic [7:0] ram3 [0:RAM_SIZE/4-1];  // Byte 3
+  
   logic        ram_read_pending;
   logic [31:0] ram_rdata_reg;
   logic [31:0] accel_rdata_reg;
   
-  // Combined RAM access - single always block for Quartus synthesis
-  // Priority: Accelerator write > CPU write (accelerator is faster, CPU waits)
+  // RAM Port A: CPU access
   always_ff @(posedge clk) begin
     ram_read_pending <= 1'b0;
     
-    // Port A: CPU access
     if (mem_valid && sel_ram && !ram_ready) begin
       if (|mem_wstrb) begin
-        // CPU Write (only if accelerator not writing)
+        // CPU Write (byte-enable supported via separate RAMs)
         if (!accel_mem_we) begin
-          if (mem_wstrb[0]) ram[mem_addr[15:2]][7:0]   <= mem_wdata[7:0];
-          if (mem_wstrb[1]) ram[mem_addr[15:2]][15:8]  <= mem_wdata[15:8];
-          if (mem_wstrb[2]) ram[mem_addr[15:2]][23:16] <= mem_wdata[23:16];
-          if (mem_wstrb[3]) ram[mem_addr[15:2]][31:24] <= mem_wdata[31:24];
+          if (mem_wstrb[0]) ram0[mem_addr[15:2]] <= mem_wdata[7:0];
+          if (mem_wstrb[1]) ram1[mem_addr[15:2]] <= mem_wdata[15:8];
+          if (mem_wstrb[2]) ram2[mem_addr[15:2]] <= mem_wdata[23:16];
+          if (mem_wstrb[3]) ram3[mem_addr[15:2]] <= mem_wdata[31:24];
         end
         ram_read_pending <= 1'b1;
       end else begin
-        // CPU Read
-        ram_rdata_reg <= ram[mem_addr[15:2]];
+        // CPU Read - concatenate 4 bytes
+        ram_rdata_reg <= {ram3[mem_addr[15:2]], ram2[mem_addr[15:2]], 
+                          ram1[mem_addr[15:2]], ram0[mem_addr[15:2]]};
         ram_read_pending <= 1'b1;
       end
     end
-    
-    // Port B: Accelerator access (uses ram_addr for both read and write)
+  end
+  
+  // RAM Port B: Accelerator access (separate always block for true dual-port)
+  always_ff @(posedge clk) begin
     if (accel_mem_we) begin
-      ram[accel_mem_addr[15:2]] <= accel_mem_wdata;
+      ram0[accel_mem_addr[15:2]] <= accel_mem_wdata[7:0];
+      ram1[accel_mem_addr[15:2]] <= accel_mem_wdata[15:8];
+      ram2[accel_mem_addr[15:2]] <= accel_mem_wdata[23:16];
+      ram3[accel_mem_addr[15:2]] <= accel_mem_wdata[31:24];
     end
     
     if (accel_mem_re) begin
-      accel_rdata_reg <= ram[accel_mem_addr[15:2]];
+      accel_rdata_reg <= {ram3[accel_mem_addr[15:2]], ram2[accel_mem_addr[15:2]],
+                          ram1[accel_mem_addr[15:2]], ram0[accel_mem_addr[15:2]]};
     end
   end
   
