@@ -47,7 +47,7 @@ puts "============================================================"
 
 # Run simulation
 puts "Starting simulation..."
-vsim -voptargs=+acc work.soc_tb
+vsim -voptargs=+acc work.soc_tb +firmware=../sw/driver/firmware.hex
 
 # Add waves
 add wave -position insertpoint sim:/soc_tb/*
