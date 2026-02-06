@@ -71,11 +71,9 @@ module soc_top #(
   // Accelerator signals
   logic [31:0] accel_rdata;
   logic        accel_ready;
-  logic [31:0] accel_mem_addr;
+  logic [31:0] accel_mem_addr;    // Single address for read/write
   logic [31:0] accel_mem_rdata;
   logic        accel_mem_re;
-  logic        accel_mem_rvalid;
-  logic [31:0] accel_mem_waddr;
   logic [31:0] accel_mem_wdata;
   logic        accel_mem_we;
   logic [3:0]  accel_led;
@@ -210,7 +208,6 @@ module soc_top #(
   // Priority: Accelerator write > CPU write (accelerator is faster, CPU waits)
   always_ff @(posedge clk) begin
     ram_read_pending <= 1'b0;
-    accel_mem_rvalid <= 1'b0;
     
     // Port A: CPU access
     if (mem_valid && sel_ram && !ram_ready) begin
@@ -230,14 +227,13 @@ module soc_top #(
       end
     end
     
-    // Port B: Accelerator access
+    // Port B: Accelerator access (uses ram_addr for both read and write)
     if (accel_mem_we) begin
-      ram[accel_mem_waddr[15:2]] <= accel_mem_wdata;
+      ram[accel_mem_addr[15:2]] <= accel_mem_wdata;
     end
     
     if (accel_mem_re) begin
       accel_rdata_reg <= ram[accel_mem_addr[15:2]];
-      accel_mem_rvalid <= 1'b1;
     end
   end
   
@@ -268,16 +264,15 @@ module soc_top #(
     .mmio_ready (accel_ready),
     
     // Memory interface (Port B of RAM)
-    .mem_addr   (accel_mem_addr),
-    .mem_rdata  (accel_mem_rdata),
-    .mem_re     (accel_mem_re),
-    .mem_rvalid (accel_mem_rvalid),
-    .mem_waddr  (accel_mem_waddr),
-    .mem_wdata  (accel_mem_wdata),
-    .mem_we     (accel_mem_we),
+    .ram_addr   (accel_mem_addr),
+    .ram_rdata  (accel_mem_rdata),
+    .ram_re     (accel_mem_re),
+    .ram_wdata  (accel_mem_wdata),
+    .ram_we     (accel_mem_we),
     
-    // Status LED
-    .led        (accel_led)
+    // Status
+    .led        (accel_led),
+    .irq        ()  // Not used
   );
   
   // ============================================================
