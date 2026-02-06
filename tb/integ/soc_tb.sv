@@ -94,7 +94,7 @@ module soc_tb;
   logic [31:0] ram_read_addr;
 
   // CPU RAM access
-  always_ff @(posedge clk) begin
+  always @(posedge clk) begin
     if (!n_reset) begin
       ram_read_pending <= 1'b0;
       ram_rdata_reg    <= 32'h0;
@@ -118,7 +118,7 @@ module soc_tb;
   end
 
   // Accelerator RAM access (directly from accel_top ram_* ports)
-  always_ff @(posedge clk) begin
+  always @(posedge clk) begin
     if (!n_reset) begin
       accel_ram_rdata <= 32'h0;
     end else begin
