@@ -195,50 +195,55 @@ module soc_top #(
   end
   
   // ============================================================
-  // On-Chip RAM (64KB)
+  // On-Chip RAM (64KB) - True Dual-Port
   // ============================================================
-  // Dual-port: Port A for CPU, Port B for Accelerator
-  // Use Quartus synthesis attribute to initialize from MIF file
+  // Port A: CPU (read/write)
+  // Port B: Accelerator (read/write)
+  // Quartus will infer M10K blocks with true dual-port mode
+  
   (* ram_init_file = "firmware.mif" *) logic [31:0] ram [0:RAM_SIZE/4-1];
   logic        ram_read_pending;
+  logic [31:0] ram_rdata_reg;
+  logic [31:0] accel_rdata_reg;
   
-  // Port A: CPU access
+  // Combined RAM access - single always block for Quartus synthesis
+  // Priority: Accelerator write > CPU write (accelerator is faster, CPU waits)
   always_ff @(posedge clk) begin
     ram_read_pending <= 1'b0;
+    accel_mem_rvalid <= 1'b0;
     
+    // Port A: CPU access
     if (mem_valid && sel_ram && !ram_ready) begin
       if (|mem_wstrb) begin
-        // Write
-        if (mem_wstrb[0]) ram[mem_addr[15:2]][7:0]   <= mem_wdata[7:0];
-        if (mem_wstrb[1]) ram[mem_addr[15:2]][15:8]  <= mem_wdata[15:8];
-        if (mem_wstrb[2]) ram[mem_addr[15:2]][23:16] <= mem_wdata[23:16];
-        if (mem_wstrb[3]) ram[mem_addr[15:2]][31:24] <= mem_wdata[31:24];
+        // CPU Write (only if accelerator not writing)
+        if (!accel_mem_we) begin
+          if (mem_wstrb[0]) ram[mem_addr[15:2]][7:0]   <= mem_wdata[7:0];
+          if (mem_wstrb[1]) ram[mem_addr[15:2]][15:8]  <= mem_wdata[15:8];
+          if (mem_wstrb[2]) ram[mem_addr[15:2]][23:16] <= mem_wdata[23:16];
+          if (mem_wstrb[3]) ram[mem_addr[15:2]][31:24] <= mem_wdata[31:24];
+        end
         ram_read_pending <= 1'b1;
       end else begin
-        // Read
-        ram_rdata <= ram[mem_addr[15:2]];
+        // CPU Read
+        ram_rdata_reg <= ram[mem_addr[15:2]];
         ram_read_pending <= 1'b1;
       end
     end
-  end
-  
-  assign ram_ready = ram_read_pending;
-  
-  // Port B: Accelerator read access
-  always_ff @(posedge clk) begin
-    accel_mem_rvalid <= 1'b0;
+    
+    // Port B: Accelerator access
+    if (accel_mem_we) begin
+      ram[accel_mem_waddr[15:2]] <= accel_mem_wdata;
+    end
+    
     if (accel_mem_re) begin
-      accel_mem_rdata <= ram[accel_mem_addr[15:2]];
+      accel_rdata_reg <= ram[accel_mem_addr[15:2]];
       accel_mem_rvalid <= 1'b1;
     end
   end
   
-  // Port B: Accelerator write access
-  always_ff @(posedge clk) begin
-    if (accel_mem_we) begin
-      ram[accel_mem_waddr[15:2]] <= accel_mem_wdata;
-    end
-  end
+  assign ram_rdata = ram_rdata_reg;
+  assign accel_mem_rdata = accel_rdata_reg;
+  assign ram_ready = ram_read_pending;
   
   // ============================================================
   // SpMM Accelerator
