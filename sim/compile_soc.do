@@ -39,7 +39,7 @@ vlog -sv ../rtl/accel_top.sv
 
 # 4. SoC testbench
 puts "Compiling SoC testbench..."
-vlog -sv ../tb/integ/soc_tb.sv
+vlog -sv +incdir+../tb/common ../tb/integ/soc_tb.sv
 
 puts "============================================================"
 puts " Compilation Complete"
