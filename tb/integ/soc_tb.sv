@@ -92,10 +92,12 @@ module soc_tb;
   logic [31:0] ram_rdata_reg;
   logic        ram_read_pending;
   logic [31:0] ram_read_addr;
+  logic        result_written;  // Flag: main() wrote to RESULT_ADDR
 
   // CPU RAM access
   always @(posedge clk) begin
     if (!n_reset) begin
+      result_written   <= 1'b0;
       ram_read_pending <= 1'b0;
       ram_rdata_reg    <= 32'h0;
     end else begin
@@ -108,6 +110,10 @@ module soc_tb;
         if (cpu_mem_wstrb[1]) ram[cpu_mem_addr[15:2]][15:8]  <= cpu_mem_wdata[15:8];
         if (cpu_mem_wstrb[2]) ram[cpu_mem_addr[15:2]][23:16] <= cpu_mem_wdata[23:16];
         if (cpu_mem_wstrb[3]) ram[cpu_mem_addr[15:2]][31:24] <= cpu_mem_wdata[31:24];
+        // Detect write to result address
+        if (cpu_mem_addr == RESULT_ADDR) begin
+          result_written <= 1'b1;
+        end
       end
 
       // Read data
@@ -296,10 +302,8 @@ module soc_tb;
         break;
       end
 
-      // Check if main() stored a result
-      if (ram[RESULT_ADDR >> 2] !== 32'hxxxxxxxx && 
-          ram[RESULT_ADDR >> 2] !== 32'h00000000 &&
-          cycle_count > 100) begin
+      // Check if main() stored a result (wrote to RESULT_ADDR)
+      if (result_written && cycle_count > 100) begin
         // Result was written - check after a few more cycles
         repeat (10) @(posedge clk);
         break;
