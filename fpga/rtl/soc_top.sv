@@ -194,57 +194,84 @@ module soc_top #(
   end
   
   // ============================================================
-  // On-Chip RAM (64KB) - True Dual-Port
+  // On-Chip RAM (64KB) - True Dual-Port using altsyncram
   // ============================================================
-  // Port A: CPU (read/write)
-  // Port B: Accelerator (read/write)
-  // Use 4 separate byte RAMs for proper M10K inference with byte enables
-  // Quartus cannot infer Block RAM with partial word writes on a single array
-  
-  (* ram_init_file = "firmware0.mif" *) logic [7:0] ram0 [0:RAM_SIZE/4-1];  // Byte 0
-  (* ram_init_file = "firmware1.mif" *) logic [7:0] ram1 [0:RAM_SIZE/4-1];  // Byte 1
-  (* ram_init_file = "firmware2.mif" *) logic [7:0] ram2 [0:RAM_SIZE/4-1];  // Byte 2
-  (* ram_init_file = "firmware3.mif" *) logic [7:0] ram3 [0:RAM_SIZE/4-1];  // Byte 3
+  // Port A: CPU (read/write with byte enables)
+  // Port B: Accelerator (read/write, full words only)
+  // Using explicit altsyncram instantiation for reliable Block RAM inference
   
   logic        ram_read_pending;
   logic [31:0] ram_rdata_reg;
   logic [31:0] accel_rdata_reg;
   
-  // RAM Port A: CPU access
-  always_ff @(posedge clk) begin
-    ram_read_pending <= 1'b0;
-    
-    if (mem_valid && sel_ram && !ram_ready) begin
-      if (|mem_wstrb) begin
-        // CPU Write (byte-enable supported via separate RAMs)
-        if (!accel_mem_we) begin
-          if (mem_wstrb[0]) ram0[mem_addr[15:2]] <= mem_wdata[7:0];
-          if (mem_wstrb[1]) ram1[mem_addr[15:2]] <= mem_wdata[15:8];
-          if (mem_wstrb[2]) ram2[mem_addr[15:2]] <= mem_wdata[23:16];
-          if (mem_wstrb[3]) ram3[mem_addr[15:2]] <= mem_wdata[31:24];
-        end
-        ram_read_pending <= 1'b1;
-      end else begin
-        // CPU Read - concatenate 4 bytes
-        ram_rdata_reg <= {ram3[mem_addr[15:2]], ram2[mem_addr[15:2]], 
-                          ram1[mem_addr[15:2]], ram0[mem_addr[15:2]]};
-        ram_read_pending <= 1'b1;
-      end
-    end
-  end
+  // Port A signals (directly from CPU)
+  wire [13:0] ram_addr_a = mem_addr[15:2];
+  wire [31:0] ram_wdata_a = mem_wdata;
+  wire [3:0]  ram_byteena_a = mem_wstrb;
+  wire        ram_wren_a = mem_valid && sel_ram && |mem_wstrb && !accel_mem_we;
+  wire        ram_rden_a = mem_valid && sel_ram && ~|mem_wstrb;
   
-  // RAM Port B: Accelerator access (separate always block for true dual-port)
+  // Port B signals (from accelerator)  
+  wire [13:0] ram_addr_b = accel_mem_addr[15:2];
+  wire [31:0] ram_wdata_b = accel_mem_wdata;
+  wire        ram_wren_b = accel_mem_we;
+  
+  // Instantiate true dual-port RAM using altsyncram
+  altsyncram #(
+    .operation_mode       ("BIDIR_DUAL_PORT"),
+    .width_a              (32),
+    .widthad_a            (14),
+    .numwords_a           (16384),
+    .width_b              (32),
+    .widthad_b            (14),
+    .numwords_b           (16384),
+    .width_byteena_a      (4),
+    .width_byteena_b      (1),
+    .outdata_reg_a        ("UNREGISTERED"),
+    .outdata_reg_b        ("UNREGISTERED"),
+    .address_reg_b        ("CLOCK0"),
+    .indata_reg_b         ("CLOCK0"),
+    .wrcontrol_wraddress_reg_b ("CLOCK0"),
+    .byteena_reg_b        ("CLOCK0"),
+    .read_during_write_mode_port_a ("NEW_DATA_NO_NBE_READ"),
+    .read_during_write_mode_port_b ("NEW_DATA_NO_NBE_READ"),
+    .read_during_write_mode_mixed_ports ("DONT_CARE"),
+    .init_file            ("firmware.mif"),
+    .lpm_type             ("altsyncram"),
+    .intended_device_family ("Cyclone V")
+  ) u_ram (
+    .clock0      (clk),
+    .address_a   (ram_addr_a),
+    .data_a      (ram_wdata_a),
+    .byteena_a   (ram_byteena_a),
+    .wren_a      (ram_wren_a),
+    .q_a         (ram_rdata_reg),
+    .address_b   (ram_addr_b),
+    .data_b      (ram_wdata_b),
+    .byteena_b   (1'b1),
+    .wren_b      (ram_wren_b),
+    .q_b         (accel_rdata_reg),
+    // Unused ports
+    .aclr0       (1'b0),
+    .aclr1       (1'b0),
+    .addressstall_a (1'b0),
+    .addressstall_b (1'b0),
+    .clock1      (1'b1),
+    .clocken0    (1'b1),
+    .clocken1    (1'b1),
+    .clocken2    (1'b1),
+    .clocken3    (1'b1),
+    .eccstatus   (),
+    .rden_a      (1'b1),
+    .rden_b      (1'b1)
+  );
+  
+  // RAM ready signal (1 cycle latency)
   always_ff @(posedge clk) begin
-    if (accel_mem_we) begin
-      ram0[accel_mem_addr[15:2]] <= accel_mem_wdata[7:0];
-      ram1[accel_mem_addr[15:2]] <= accel_mem_wdata[15:8];
-      ram2[accel_mem_addr[15:2]] <= accel_mem_wdata[23:16];
-      ram3[accel_mem_addr[15:2]] <= accel_mem_wdata[31:24];
-    end
-    
-    if (accel_mem_re) begin
-      accel_rdata_reg <= {ram3[accel_mem_addr[15:2]], ram2[accel_mem_addr[15:2]],
-                          ram1[accel_mem_addr[15:2]], ram0[accel_mem_addr[15:2]]};
+    if (!rst_n) begin
+      ram_read_pending <= 1'b0;
+    end else begin
+      ram_read_pending <= mem_valid && sel_ram && !ram_ready;
     end
   end
   
