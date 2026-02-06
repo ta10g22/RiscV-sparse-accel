@@ -25,8 +25,9 @@ module soc_top #(
   // Switches
   input  logic [9:0]  sw,
   
-  // Push buttons (directly usable, directly active low)
-  input  logic [3:0]  key,
+  // Push buttons (directly usable, active low)
+  // Note: KEY[0] is used for n_reset, so only KEY[3:1] available
+  input  logic [3:1]  key,
   
   // 7-Segment (directly usable)
   output logic [6:0]  hex0,
@@ -302,7 +303,7 @@ module soc_top #(
             gpio_rdata <= {22'h0, sw};
           end
           2'b10: begin  // GPIO_IN (Keys)
-            gpio_rdata <= {28'h0, key};
+            gpio_rdata <= {29'h0, key};  // key[3:1] only, key[0] = reset
           end
           default: begin
             gpio_rdata <= 32'h0;

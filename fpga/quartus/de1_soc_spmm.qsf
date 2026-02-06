@@ -81,8 +81,8 @@ set_location_assignment PIN_AE12 -to sw[9]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sw[*]
 
 # Push Buttons (directly usable)
-set_location_assignment PIN_AA15 -to key[0]
-set_location_assignment PIN_AA14 -to key[1]
+# KEY[0] (AA14) is used for n_reset, so keys start from index 1
+set_location_assignment PIN_AA15 -to key[1]
 set_location_assignment PIN_W15 -to key[2]
 set_location_assignment PIN_Y16 -to key[3]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to key[*]
