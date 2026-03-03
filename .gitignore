@@ -1,1 +1,5 @@
 *.o
+
+# Memory file (local only)
+CLAUDE.md
+PROJECT_CONTEXT.md
