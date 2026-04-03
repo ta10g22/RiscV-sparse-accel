@@ -1,5 +1,12 @@
 *.o
 
+# macOS clutter
+.DS_Store
+
+# Keep local docs/report out of Git
+docs/
+Part_III_broject_brief.pdf
+
 # Memory file (local only)
 CLAUDE.md
 PROJECT_CONTEXT.md
