@@ -446,7 +446,7 @@ module soc_top #(
     .reg_div_do  (simpleuart_reg_div_do),
 
     .reg_dat_we  (simpleuart_reg_dat_sel ? mem_wstrb[0] : 1'b0),
-    .reg_dat_re  (simpleuart_reg_dat_sel && !|mem_wstrb),
+    .reg_dat_re  (simpleuart_reg_dat_sel && !(|mem_wstrb)),
     .reg_dat_di  (mem_wdata),
     .reg_dat_do  (simpleuart_reg_dat_do),
     .reg_dat_wait(simpleuart_reg_dat_wait)
