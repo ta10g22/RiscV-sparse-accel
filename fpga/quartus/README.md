@@ -7,6 +7,7 @@ This Quartus project implements a System-on-Chip with:
 - **SpMM Accelerator** - Sparse Matrix-Matrix Multiply hardware accelerator
 - **64KB On-Chip RAM** - For firmware and data
 - **GPIO** - LEDs, switches, 7-segment displays
+- **UART** - `simpleuart` exposed on GPIO header pins for external USB-TTL
 
 ## Target Device
 
@@ -21,6 +22,7 @@ This Quartus project implements a System-on-Chip with:
 | `0x0000_0000 - 0x0000_FFFF` | RAM         | 64KB on-chip RAM          |
 | `0x1000_0000 - 0x1000_00FF` | Accelerator | SpMM MMIO registers       |
 | `0x2000_0000 - 0x2000_000F` | GPIO        | LEDs, Switches, Keys      |
+| `0x2000_0100 - 0x2000_01FF` | UART        | `simpleuart` MMIO window  |
 
 ### GPIO Registers
 
@@ -29,6 +31,20 @@ This Quartus project implements a System-on-Chip with:
 | `0x00` | GPIO_OUT  | Write to LEDs[5:0], read back      |
 | `0x04` | GPIO_IN   | Read switches (SW[9:0])            |
 | `0x08` | GPIO_KEY  | Read push buttons (KEY[3:0])       |
+
+### UART Registers
+
+| Offset | Name      | Description                                |
+|--------|-----------|--------------------------------------------|
+| `0x04` | UART_DIV  | Baud divider (`50MHz/115200 ~= 434`)       |
+| `0x08` | UART_DATA | TX write / RX read register (`simpleuart`) |
+
+### External UART Wiring (FTDI C232HM or equivalent)
+
+- FPGA `uart_tx` on `GPIO_0[0]` (`PIN_AC18`) -> adapter RXD
+- FPGA `uart_rx` on `GPIO_0[1]` (`PIN_Y17`) -> adapter TXD
+- FPGA GND -> adapter GND
+- Use 3.3V TTL levels
 
 ## Building
 

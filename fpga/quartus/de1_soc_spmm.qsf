@@ -30,6 +30,7 @@ set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_
 # ============================================================
 # PicoRV32 CPU
 set_global_assignment -name VERILOG_FILE ../../ip/picorv32/picorv32.v
+set_global_assignment -name VERILOG_FILE ../../ip/picorv32/picosoc/simpleuart.v
 
 # RTL
 set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/accel_datapath.sv
@@ -142,9 +143,10 @@ set_location_assignment PIN_AA26 -to hex5[5]
 set_location_assignment PIN_AA25 -to hex5[6]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to hex5[*]
 
-# UART (directly usable GPIO pins)
-set_location_assignment PIN_AJ17 -to uart_tx
-set_location_assignment PIN_AK18 -to uart_rx
+# UART on GPIO_0 header pins (for external USB-to-TTL adapter, e.g. FTDI C232HM)
+# GPIO_0[0] = PIN_AC18, GPIO_0[1] = PIN_Y17
+set_location_assignment PIN_AC18 -to uart_tx
+set_location_assignment PIN_Y17 -to uart_rx
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to uart_tx
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to uart_rx
 

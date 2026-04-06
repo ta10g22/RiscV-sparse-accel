@@ -8,6 +8,7 @@
 //   0x0000_0000 - 0x0000_FFFF : RAM (64KB)
 //   0x1000_0000 - 0x1000_00FF : SpMM Accelerator MMIO
 //   0x2000_0000 - 0x2000_000F : GPIO (LEDs, Switches)
+//   0x2000_0100 - 0x2000_01FF : UART MMIO (external USB-to-TTL on GPIO pins)
 // ============================================================
 
 module soc_top #(
@@ -68,6 +69,7 @@ module soc_top #(
   logic        sel_ram;
   logic        sel_accel;
   logic        sel_gpio;
+  logic        sel_uart;
   
   // RAM signals
   logic [31:0] ram_rdata;
@@ -87,6 +89,17 @@ module soc_top #(
   logic [31:0] gpio_rdata;
   logic        gpio_ready;
   logic [31:0] gpio_out_reg;
+
+  // UART signals
+  logic [31:0] uart_rdata;
+  logic        uart_ready;
+  logic        uart_bad_addr;
+
+  logic        simpleuart_reg_div_sel;
+  logic [31:0] simpleuart_reg_div_do;
+  logic        simpleuart_reg_dat_sel;
+  logic [31:0] simpleuart_reg_dat_do;
+  logic        simpleuart_reg_dat_wait;
   
   // ============================================================
   // Clock and Reset
@@ -109,9 +122,32 @@ module soc_top #(
   // RAM:   0x0000_0000 - 0x0000_FFFF
   // Accel: 0x1000_0000 - 0x1000_00FF
   // GPIO:  0x2000_0000 - 0x2000_000F
+  // UART:  0x2000_0100 - 0x2000_01FF
   assign sel_ram   = (mem_addr[31:16] == 16'h0000);
   assign sel_accel = (mem_addr[31:8]  == 24'h100000);
   assign sel_gpio  = (mem_addr[31:4]  == 28'h2000000);
+  assign sel_uart  = (mem_addr[31:8]  == 24'h200001);
+
+  // simpleuart register map:
+  //   +0x04 : divider register
+  //   +0x08 : data register
+  assign simpleuart_reg_div_sel = mem_valid && sel_uart && (mem_addr[7:0] == 8'h04);
+  assign simpleuart_reg_dat_sel = mem_valid && sel_uart && (mem_addr[7:0] == 8'h08);
+
+  // Return ready with zero on unmapped offsets in UART window.
+  assign uart_bad_addr = mem_valid && sel_uart && !simpleuart_reg_div_sel && !simpleuart_reg_dat_sel;
+  assign uart_ready = simpleuart_reg_div_sel ||
+                      (simpleuart_reg_dat_sel && !simpleuart_reg_dat_wait) ||
+                      uart_bad_addr;
+
+  always_comb begin
+    if (simpleuart_reg_div_sel)
+      uart_rdata = simpleuart_reg_div_do;
+    else if (simpleuart_reg_dat_sel)
+      uart_rdata = simpleuart_reg_dat_do;
+    else
+      uart_rdata = 32'h0000_0000;
+  end
   
   // ============================================================
   // PicoRV32 CPU
@@ -184,7 +220,8 @@ module soc_top #(
   // ============================================================
   assign mem_ready = (sel_ram   && ram_ready)   ||
                      (sel_accel && accel_ready) ||
-                     (sel_gpio  && gpio_ready);
+                     (sel_gpio  && gpio_ready)  ||
+                     (sel_uart  && uart_ready);
   
   always_comb begin
     if (sel_ram)
@@ -193,6 +230,8 @@ module soc_top #(
       mem_rdata = accel_rdata;
     else if (sel_gpio)
       mem_rdata = gpio_rdata;
+    else if (sel_uart)
+      mem_rdata = uart_rdata;
     else
       mem_rdata = 32'hDEAD_BEEF;
   end
@@ -390,8 +429,27 @@ module soc_top #(
   assign hex3 = hex_decode(gpio_out_reg[15:12]);
   assign hex4 = hex_decode(gpio_out_reg[19:16]);
   assign hex5 = hex_decode(gpio_out_reg[23:20]);
-  
-  // UART - Placeholder for now, tie off
-  assign uart_tx = 1'b1;  // Idle high
+
+  // ============================================================
+  // UART (simpleuart from PicoSoC)
+  // ============================================================
+  simpleuart #(
+    .DEFAULT_DIV (434)  // 50MHz / 115200 ~= 434
+  ) u_uart (
+    .clk         (clk),
+    .resetn      (rst_n),
+    .ser_tx      (uart_tx),
+    .ser_rx      (uart_rx),
+
+    .reg_div_we  (simpleuart_reg_div_sel ? mem_wstrb : 4'b0000),
+    .reg_div_di  (mem_wdata),
+    .reg_div_do  (simpleuart_reg_div_do),
+
+    .reg_dat_we  (simpleuart_reg_dat_sel ? mem_wstrb[0] : 1'b0),
+    .reg_dat_re  (simpleuart_reg_dat_sel && !|mem_wstrb),
+    .reg_dat_di  (mem_wdata),
+    .reg_dat_do  (simpleuart_reg_dat_do),
+    .reg_dat_wait(simpleuart_reg_dat_wait)
+  );
 
 endmodule

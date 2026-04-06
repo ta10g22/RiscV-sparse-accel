@@ -17,6 +17,16 @@
 #define GPIO_IN (*(volatile uint32_t *)(GPIO_BASE + 0x04))  // Switches
 
 // ============================================================
+// UART MMIO (simpleuart in soc_top)
+// ============================================================
+#define UART_BASE 0x20000100
+#define UART_DIV (*(volatile uint32_t *)(UART_BASE + 0x04))
+#define UART_DATA (*(volatile uint32_t *)(UART_BASE + 0x08))
+
+// 50MHz / 115200 ~= 434
+#define UART_DIV_115200 434
+
+// ============================================================
 // Cycle Counter (PicoRV32 CSR)
 // ============================================================
 static inline uint32_t read_cycles(void)
@@ -24,6 +34,49 @@ static inline uint32_t read_cycles(void)
     uint32_t cycles;
     asm volatile("rdcycle %0" : "=r"(cycles));
     return cycles;
+}
+
+static inline void uart_init(void)
+{
+    UART_DIV = UART_DIV_115200;
+}
+
+static inline void uart_putc(char c)
+{
+    UART_DATA = (uint32_t)(uint8_t)c;
+}
+
+void uart_puts(const char *s)
+{
+    while (*s)
+    {
+        if (*s == '\n')
+            uart_putc('\r');
+        uart_putc(*s++);
+    }
+}
+
+void uart_put_u32(uint32_t value)
+{
+    char buf[10];
+    int i = 0;
+
+    if (value == 0)
+    {
+        uart_putc('0');
+        return;
+    }
+
+    while (value > 0 && i < 10)
+    {
+        buf[i++] = (char)('0' + (value % 10));
+        value /= 10;
+    }
+
+    while (i > 0)
+    {
+        uart_putc(buf[--i]);
+    }
 }
 
 // ============================================================
@@ -183,6 +236,9 @@ int main(void)
     uint32_t cpu_cycles, accel_cycles;
     uint32_t speedup;
 
+    uart_init();
+    uart_puts("\nSpMM benchmark start\n");
+
     // Show "888888" while running (all segments on)
     GPIO_OUT = 0x888888;
 
@@ -221,6 +277,7 @@ int main(void)
     if (array_compare(C_cpu, C_accel, TEST_M * TEST_N) != 0)
     {
         // ERROR: Results don't match!
+        uart_puts("ERROR: CPU and accelerator results mismatch\n");
         display_error(0x01);
         while (1)
             ; // Halt
@@ -244,6 +301,16 @@ int main(void)
     // HEX3:HEX2 = Accel cycles (in hex)
     // HEX1:HEX0 = Speedup (in decimal, e.g. "05" = 5x)
     display_results(cpu_cycles, accel_cycles, speedup);
+
+    uart_puts("CPU cycles: ");
+    uart_put_u32(cpu_cycles);
+    uart_puts("\n");
+    uart_puts("Accel cycles: ");
+    uart_put_u32(accel_cycles);
+    uart_puts("\n");
+    uart_puts("Speedup: ");
+    uart_put_u32(speedup);
+    uart_puts("x\n");
 
     // Infinite loop - display stays on
     while (1)
