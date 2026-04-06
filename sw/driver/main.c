@@ -79,6 +79,17 @@ void uart_put_u32(uint32_t value)
     }
 }
 
+void uart_put_speedup_x100(uint32_t speedup_x100)
+{
+    uint32_t whole = speedup_x100 / 100;
+    uint32_t frac = speedup_x100 % 100;
+
+    uart_put_u32(whole);
+    uart_putc('.');
+    uart_putc((char)('0' + (frac / 10)));
+    uart_putc((char)('0' + (frac % 10)));
+}
+
 // ============================================================
 // 7-Segment Encoding (active low for DE1-SoC)
 // ============================================================
@@ -142,37 +153,363 @@ void display_error(uint8_t code)
 }
 
 // ============================================================
-// Test Data (larger for better benchmark)
+// Runtime Benchmark Suite (generated test matrices)
 // ============================================================
+#define MAX_M 64
+#define MAX_K 64
+#define MAX_N 32
+#define MAX_A_NNZ ((MAX_M * MAX_K) / 4) // Supports up to 75% sparsity at 64x64.
 
-// Sparse matrix A (4x4 in CSR format):
-// A = | 2  0  0  0 |
-//     | 0  3  0  0 |
-//     | 1  0  4  0 |
-//     | 0  2  0  5 |
-//
-// CSR: rowptr=[0,1,2,4,6], colidx=[0,1,0,2,1,3], values=[2,3,1,4,2,5]
+typedef enum
+{
+    PATTERN_UNIFORM = 0,
+    PATTERN_ROW_SKEWED,
+    PATTERN_CLUSTERED
+} pattern_t;
 
-#define TEST_M 4
-#define TEST_K 4
-#define TEST_N 8
-#define TEST_NNZ 6
+typedef struct
+{
+    const char *id;
+    uint32_t M;
+    uint32_t K;
+    uint32_t N;
+    uint32_t sparsity_pct; // percentage of zeros in A
+    pattern_t pattern;
+    uint32_t seed;
+} benchmark_case_t;
 
-uint32_t A_rowptr[] = {0, 1, 2, 4, 6};
-uint32_t A_colidx[] = {0, 1, 0, 2, 1, 3};
-uint32_t A_values[] = {2, 3, 1, 4, 2, 5};
-
-// Dense matrix B (4x8 row-major)
-uint32_t B_matrix[TEST_K * TEST_N] = {
-    1, 2, 3, 4, 5, 6, 7, 8,  // Row 0
-    2, 3, 4, 5, 6, 7, 8, 9,  // Row 1
-    3, 4, 5, 6, 7, 8, 9, 10, // Row 2
-    4, 5, 6, 7, 8, 9, 10, 11 // Row 3
+static const benchmark_case_t benchmark_cases[] = {
+    {"T1", 8, 8, 8, 75, PATTERN_UNIFORM, 0x1001},
+    {"T2", 16, 16, 8, 75, PATTERN_UNIFORM, 0x1002},
+    {"T3", 32, 32, 8, 75, PATTERN_UNIFORM, 0x1003},
+    {"T4", 64, 64, 8, 75, PATTERN_UNIFORM, 0x1004},
+    {"T5", 64, 64, 16, 75, PATTERN_UNIFORM, 0x1005},
+    {"T6", 64, 64, 32, 75, PATTERN_UNIFORM, 0x1006},
+    {"T7", 32, 32, 32, 50, PATTERN_UNIFORM, 0x1007},
+    {"T8", 32, 32, 32, 75, PATTERN_UNIFORM, 0x1008},
+    {"T9", 32, 32, 32, 90, PATTERN_UNIFORM, 0x1009},
+    {"T10", 32, 32, 32, 75, PATTERN_ROW_SKEWED, 0x100A},
+    {"T11", 32, 32, 32, 75, PATTERN_CLUSTERED, 0x100B},
+    {"T12", 64, 64, 32, 90, PATTERN_UNIFORM, 0x100C},
 };
 
-// Output matrices
-uint32_t C_accel[TEST_M * TEST_N];
-uint32_t C_cpu[TEST_M * TEST_N];
+#define NUM_TESTS ((uint32_t)(sizeof(benchmark_cases) / sizeof(benchmark_cases[0])))
+
+// Runtime-generated matrix storage.
+uint32_t A_rowptr[MAX_M + 1];
+uint32_t A_colidx[MAX_A_NNZ];
+uint32_t A_values[MAX_A_NNZ];
+uint32_t B_matrix[MAX_K * MAX_N];
+uint32_t C_accel[MAX_M * MAX_N];
+uint32_t C_cpu[MAX_M * MAX_N];
+
+static uint32_t rng_state = 1;
+
+static inline void rng_seed(uint32_t seed)
+{
+    rng_state = seed ? seed : 1u;
+}
+
+static inline uint32_t rng_next(void)
+{
+    rng_state = rng_state * 1664525u + 1013904223u;
+    return rng_state;
+}
+
+static inline uint32_t rng_range(uint32_t limit)
+{
+    return limit ? (rng_next() % limit) : 0u;
+}
+
+const char *pattern_name(pattern_t pattern)
+{
+    switch (pattern)
+    {
+    case PATTERN_UNIFORM:
+        return "uniform";
+    case PATTERN_ROW_SKEWED:
+        return "row_skewed";
+    case PATTERN_CLUSTERED:
+        return "clustered";
+    default:
+        return "unknown";
+    }
+}
+
+uint32_t target_nnz_from_sparsity(uint32_t M, uint32_t K, uint32_t sparsity_pct)
+{
+    uint32_t total = M * K;
+    uint32_t dense_pct;
+
+    if (sparsity_pct > 100u)
+        sparsity_pct = 100u;
+
+    dense_pct = 100u - sparsity_pct;
+    return (total * dense_pct + 50u) / 100u;
+}
+
+uint32_t choose_clustered_column(uint32_t K)
+{
+    uint32_t block_w = K / 4u;
+    uint32_t max_start;
+    uint32_t starts[3];
+    uint32_t c;
+
+    if (block_w < 2u)
+        block_w = (K >= 2u) ? 2u : 1u;
+    if (block_w > K)
+        block_w = K;
+
+    max_start = K - block_w;
+    starts[0] = 0u;
+    starts[1] = K / 3u;
+    starts[2] = (2u * K) / 3u;
+
+    if (starts[1] > max_start)
+        starts[1] = max_start;
+    if (starts[2] > max_start)
+        starts[2] = max_start;
+
+    if (rng_range(100u) < 80u)
+    {
+        c = rng_range(3u);
+        return starts[c] + rng_range(block_w);
+    }
+    return rng_range(K);
+}
+
+uint32_t assign_row_nnz(const benchmark_case_t *tc, uint32_t target_nnz, uint16_t *row_nnz)
+{
+    uint32_t i;
+    uint32_t added_total = 0;
+
+    for (i = 0; i < tc->M; i++)
+        row_nnz[i] = 0;
+
+    for (i = 0; i < target_nnz; i++)
+    {
+        uint32_t row;
+        uint32_t probe;
+        uint32_t added = 0;
+
+        if (tc->pattern == PATTERN_UNIFORM)
+        {
+            row = i % tc->M;
+        }
+        else if (tc->pattern == PATTERN_ROW_SKEWED)
+        {
+            uint32_t hot_rows = tc->M / 4u;
+            if (hot_rows == 0u)
+                hot_rows = 1u;
+
+            if (rng_range(100u) < 70u)
+                row = rng_range(hot_rows);
+            else
+                row = rng_range(tc->M);
+        }
+        else
+        {
+            uint32_t block_h = tc->M / 4u;
+            uint32_t starts[3];
+            uint32_t c;
+
+            if (block_h == 0u)
+                block_h = 1u;
+
+            starts[0] = 0u;
+            starts[1] = tc->M / 3u;
+            starts[2] = (2u * tc->M) / 3u;
+
+            if (rng_range(100u) < 85u)
+            {
+                c = rng_range(3u);
+                row = starts[c] + rng_range(block_h);
+                if (row >= tc->M)
+                    row = tc->M - 1u;
+            }
+            else
+            {
+                row = rng_range(tc->M);
+            }
+        }
+
+        if (row_nnz[row] < tc->K)
+        {
+            row_nnz[row]++;
+            added = 1;
+        }
+        else
+        {
+            for (probe = 0; probe < tc->M; probe++)
+            {
+                uint32_t rr = (row + probe + 1u) % tc->M;
+                if (row_nnz[rr] < tc->K)
+                {
+                    row_nnz[rr]++;
+                    added = 1;
+                    break;
+                }
+            }
+        }
+
+        if (!added)
+            break;
+        added_total++;
+    }
+
+    return added_total;
+}
+
+uint32_t generate_sparse_A_csr(const benchmark_case_t *tc, uint32_t target_nnz)
+{
+    uint16_t row_nnz[MAX_M];
+    uint8_t used_cols[MAX_K];
+    uint32_t row_cols[MAX_K];
+    uint32_t pos = 0;
+    uint32_t r;
+    uint32_t i;
+    uint32_t actual_nnz;
+
+    actual_nnz = assign_row_nnz(tc, target_nnz, row_nnz);
+    (void)actual_nnz;
+
+    A_rowptr[0] = 0;
+
+    for (r = 0; r < tc->M; r++)
+    {
+        uint32_t cnt = row_nnz[r];
+        uint32_t filled = 0;
+
+        for (i = 0; i < tc->K; i++)
+            used_cols[i] = 0u;
+
+        for (i = 0; i < cnt; i++)
+        {
+            uint32_t col;
+            uint32_t tries = 0;
+
+            if (tc->pattern == PATTERN_CLUSTERED)
+                col = choose_clustered_column(tc->K);
+            else
+                col = rng_range(tc->K);
+
+            while (used_cols[col] && tries < tc->K)
+            {
+                col = (col + 1u) % tc->K;
+                tries++;
+            }
+
+            if (used_cols[col])
+                break;
+
+            used_cols[col] = 1u;
+            row_cols[filled++] = col;
+        }
+
+        // Insertion sort for stable, deterministic CSR colidx ordering.
+        for (i = 1; i < filled; i++)
+        {
+            uint32_t key = row_cols[i];
+            uint32_t j = i;
+            while (j > 0 && row_cols[j - 1] > key)
+            {
+                row_cols[j] = row_cols[j - 1];
+                j--;
+            }
+            row_cols[j] = key;
+        }
+
+        for (i = 0; i < filled; i++)
+        {
+            if (pos >= MAX_A_NNZ)
+                break;
+
+            A_colidx[pos] = row_cols[i];
+            A_values[pos] = 1u + rng_range(13u);
+            pos++;
+        }
+
+        A_rowptr[r + 1] = pos;
+    }
+
+    return pos;
+}
+
+void generate_dense_B(uint32_t K, uint32_t N)
+{
+    uint32_t i;
+    uint32_t total = K * N;
+
+    for (i = 0; i < total; i++)
+    {
+        B_matrix[i] = 1u + rng_range(17u);
+    }
+}
+
+uint32_t generate_case_data(const benchmark_case_t *tc)
+{
+    uint32_t target_nnz = target_nnz_from_sparsity(tc->M, tc->K, tc->sparsity_pct);
+
+    if (target_nnz > MAX_A_NNZ)
+        target_nnz = MAX_A_NNZ;
+
+    rng_seed(tc->seed);
+    generate_dense_B(tc->K, tc->N);
+    return generate_sparse_A_csr(tc, target_nnz);
+}
+
+void compute_speedups(uint32_t cpu_cycles, uint32_t accel_cycles, uint32_t *speedup_x100, uint32_t *speedup_led)
+{
+    if (accel_cycles > 0)
+    {
+        uint32_t num = cpu_cycles;
+        uint32_t den = accel_cycles;
+
+        // Keep arithmetic 32-bit so bare-metal link does not require __udivdi3.
+        while (num > (UINT32_MAX / 100u) && den > 1u)
+        {
+            num >>= 1;
+            den >>= 1;
+        }
+
+        *speedup_x100 = (num * 100u + (den / 2u)) / den;
+        *speedup_led = (*speedup_x100 + 50u) / 100u;
+        if (*speedup_led > 99u)
+            *speedup_led = 99u;
+    }
+    else
+    {
+        *speedup_x100 = 9999u; // 99.99x sentinel
+        *speedup_led = 99u;
+    }
+}
+
+void uart_print_result_row(const benchmark_case_t *tc, uint32_t nnz, uint32_t cpu_cycles,
+                           uint32_t accel_cycles, uint32_t speedup_x100, int pass)
+{
+    uart_puts(tc->id);
+    uart_putc(',');
+    uart_put_u32(tc->M);
+    uart_putc(',');
+    uart_put_u32(tc->K);
+    uart_putc(',');
+    uart_put_u32(tc->N);
+    uart_putc(',');
+    uart_put_u32(tc->sparsity_pct);
+    uart_putc(',');
+    uart_puts(pattern_name(tc->pattern));
+    uart_putc(',');
+    uart_put_u32(nnz);
+    uart_putc(',');
+    uart_put_u32(cpu_cycles);
+    uart_putc(',');
+    uart_put_u32(accel_cycles);
+    uart_putc(',');
+    uart_put_speedup_x100(speedup_x100);
+    uart_putc(',');
+    uart_puts(pass ? "PASS" : "FAIL");
+    uart_puts("\n");
+}
 
 // ============================================================
 // Software SpMM (CPU baseline)
@@ -232,85 +569,63 @@ void array_clear(uint32_t *arr, int len)
 
 int main(void)
 {
-    uint32_t start, end;
+    uint32_t start;
+    uint32_t end;
     uint32_t cpu_cycles, accel_cycles;
-    uint32_t speedup;
+    uint32_t speedup_led;
+    uint32_t speedup_x100;
+    uint32_t t;
+    uint32_t pass_count = 0;
 
     uart_init();
-    uart_puts("\nSpMM benchmark start\n");
+    uart_puts("\nSpMM benchmark sweep start\n");
+    uart_puts("ID,M,K,N,Sparsity,Pattern,NNZ,CPU,ACCEL,Speedup,Pass\n");
 
-    // Show "888888" while running (all segments on)
-    GPIO_OUT = 0x888888;
-
-    // ========================================
-    // Benchmark 1: CPU Software SpMM
-    // ========================================
-    start = read_cycles();
-
-    spmm_cpu(TEST_M, TEST_N, TEST_K,
-             A_rowptr, A_colidx, A_values,
-             B_matrix, C_cpu);
-
-    end = read_cycles();
-    cpu_cycles = end - start;
-
-    // ========================================
-    // Benchmark 2: Hardware Accelerator SpMM
-    // ========================================
-    array_clear(C_accel, TEST_M * TEST_N);
-
-    start = read_cycles();
-
-    accel_run_spmm(
-        TEST_M, TEST_N, TEST_K, TEST_NNZ,
-        A_rowptr, A_colidx, A_values,
-        B_matrix, C_accel,
-        0 // no ReLU
-    );
-
-    end = read_cycles();
-    accel_cycles = end - start;
-
-    // ========================================
-    // Verify results match
-    // ========================================
-    if (array_compare(C_cpu, C_accel, TEST_M * TEST_N) != 0)
+    for (t = 0; t < NUM_TESTS; t++)
     {
-        // ERROR: Results don't match!
-        uart_puts("ERROR: CPU and accelerator results mismatch\n");
+        const benchmark_case_t *tc = &benchmark_cases[t];
+        uint32_t nnz;
+        int pass;
+
+        // Show "888888" while each test is running.
+        GPIO_OUT = 0x888888;
+
+        nnz = generate_case_data(tc);
+        array_clear(C_cpu, (int)(tc->M * tc->N));
+        array_clear(C_accel, (int)(tc->M * tc->N));
+
+        // CPU baseline
+        start = read_cycles();
+        spmm_cpu(tc->M, tc->N, tc->K, A_rowptr, A_colidx, A_values, B_matrix, C_cpu);
+        end = read_cycles();
+        cpu_cycles = end - start;
+
+        // Accelerator
+        start = read_cycles();
+        accel_run_spmm(tc->M, tc->N, tc->K, nnz, A_rowptr, A_colidx, A_values, B_matrix, C_accel, 0);
+        end = read_cycles();
+        accel_cycles = end - start;
+
+        // Compare and report
+        pass = (array_compare(C_cpu, C_accel, (int)(tc->M * tc->N)) == 0);
+        if (pass)
+            pass_count++;
+
+        compute_speedups(cpu_cycles, accel_cycles, &speedup_x100, &speedup_led);
+
+        // Keep board display behavior simple: rounded integer speedup.
+        display_results(cpu_cycles, accel_cycles, speedup_led);
+        uart_print_result_row(tc, nnz, cpu_cycles, accel_cycles, speedup_x100, pass);
+    }
+
+    uart_puts("SUMMARY,pass=");
+    uart_put_u32(pass_count);
+    uart_puts(",total=");
+    uart_put_u32(NUM_TESTS);
+    uart_puts("\n");
+
+    if (pass_count != NUM_TESTS)
         display_error(0x01);
-        while (1)
-            ; // Halt
-    }
-
-    // ========================================
-    // Calculate and display results
-    // ========================================
-    // Speedup = CPU_cycles / Accel_cycles
-    if (accel_cycles > 0)
-    {
-        speedup = cpu_cycles / accel_cycles;
-    }
-    else
-    {
-        speedup = 99; // Max displayable
-    }
-
-    // Display on all 6 seven-segment displays:
-    // HEX5:HEX4 = CPU cycles (÷64, in hex)
-    // HEX3:HEX2 = Accel cycles (in hex)
-    // HEX1:HEX0 = Speedup (in decimal, e.g. "05" = 5x)
-    display_results(cpu_cycles, accel_cycles, speedup);
-
-    uart_puts("CPU cycles: ");
-    uart_put_u32(cpu_cycles);
-    uart_puts("\n");
-    uart_puts("Accel cycles: ");
-    uart_put_u32(accel_cycles);
-    uart_puts("\n");
-    uart_puts("Speedup: ");
-    uart_put_u32(speedup);
-    uart_puts("x\n");
 
     // Infinite loop - display stays on
     while (1)
