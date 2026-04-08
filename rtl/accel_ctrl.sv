@@ -59,7 +59,6 @@ module accel_ctrl #(
     //MAC
     output logic                      dp_mac_en,
     output logic [$clog2(M_MAX)-1:0]  dp_mac_row,
-    output logic [$clog2(TN)-1:0]     dp_mac_col,
     output logic [DATA_WIDTH-1:0]     dp_mac_a,
 
     // tile read + WB
@@ -117,7 +116,6 @@ module accel_ctrl #(
     logic [$clog2(M_MAX)-1:0]    i, i_next;
     logic [$clog2(M_MAX)-1:0]    i_clear, i_clear_next;
     logic [$clog2(TN)-1:0]       t_clear, t_clear_next;
-    logic [$clog2(TN)-1:0]       t_mac, t_mac_next;
     logic [$clog2(M_MAX)-1:0]    i_wb, i_wb_next;
     logic [$clog2(TN)-1:0]       t_wb, t_wb_next;
 
@@ -164,7 +162,6 @@ module accel_ctrl #(
             i                 <= '0;
             i_clear           <= '0;
             t_clear           <= '0;
-            t_mac             <= '0;
             i_wb              <= '0;
             t_wb              <= '0;
 
@@ -192,7 +189,6 @@ module accel_ctrl #(
             i                 <= i_next;
             i_clear           <= i_clear_next;
             t_clear           <= t_clear_next;
-            t_mac             <= t_mac_next;
             i_wb              <= i_wb_next;
             t_wb              <= t_wb_next;
 
@@ -222,7 +218,6 @@ module accel_ctrl #(
         i_next           = i;
         i_clear_next     = i_clear;
         t_clear_next     = t_clear;
-        t_mac_next       = t_mac;
         i_wb_next        = i_wb;
         t_wb_next        = t_wb;
 
@@ -252,7 +247,6 @@ module accel_ctrl #(
 
         dp_mac_en        = 1'b0;
         dp_mac_row       = i;
-        dp_mac_col       = t_mac;
         dp_mac_a         = a_reg;
 
         dp_ctile_read_en   = 1'b0;
@@ -386,7 +380,6 @@ module accel_ctrl #(
                         if (b_idx == TN-1) begin                       // if b_idx is = last element in tile
                             b_idx_next       = b_idx;
                             b_seg_ready_next = 1'b1;
-                            t_mac_next       = '0;
                             next_nz_phase    = NZ_PHASE_0;
                             next_state       = MAC;
                         end
@@ -406,23 +399,16 @@ module accel_ctrl #(
             begin                                                      // give datapath the stuff it needs
                 dp_mac_en  = 1'b1;
                 dp_mac_row = i;
-                dp_mac_col = t_mac;
                 dp_mac_a   = a_reg;
 
-                if (t_mac == TN-1) begin                               //  We finished the MAC for this particular non zero
-                    t_mac_next = '0;
-
-                    if (p + 1 < p_end) begin                           // if there's another non zero  in the row then back to NZ_FETCH
-                        p_next        = p + 1;
-                        next_nz_phase = NZ_PHASE_0;
-                        next_state    = NZ_FETCH;
-                    end
-                    else begin                                         // if that was the last non zero value then to NEXT_ROW
-                        next_state = NEXT_ROW;
-                    end
+                // Datapath performs TN MACs in parallel, so one cycle per nonzero.
+                if (p + 1 < p_end) begin                               // if there's another non zero  in the row then back to NZ_FETCH
+                    p_next        = p + 1;
+                    next_nz_phase = NZ_PHASE_0;
+                    next_state    = NZ_FETCH;
                 end
-                else begin                                             // if tmac less than TN-1 multiply next column in B_Seg
-                    t_mac_next = t_mac + 1;
+                else begin                                             // if that was the last non zero value then to NEXT_ROW
+                    next_state = NEXT_ROW;
                 end
             end
 

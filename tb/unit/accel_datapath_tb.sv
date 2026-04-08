@@ -37,7 +37,6 @@ module accel_datapath_tb;
 
   logic                     mac_en;
   logic [$clog2(M_MAX)-1:0] mac_row;
-  logic [$clog2(TN)-1:0]    mac_col;
   logic [DATA_WIDTH-1:0]    mac_a;
 
   logic                     ctile_read_en;
@@ -67,7 +66,6 @@ module accel_datapath_tb;
     .bseg_wdata     (bseg_wdata),
     .mac_en         (mac_en),
     .mac_row        (mac_row),
-    .mac_col        (mac_col),
     .mac_a          (mac_a),
     .ctile_read_en  (ctile_read_en),
     .ctile_read_row (ctile_read_row),
@@ -93,7 +91,6 @@ module accel_datapath_tb;
     bseg_wdata     = '0;
     mac_en         = 1'b0;
     mac_row        = '0;
-    mac_col        = '0;
     mac_a          = '0;
     ctile_read_en  = 1'b0;
     ctile_read_row = '0;
@@ -114,12 +111,11 @@ module accel_datapath_tb;
     bseg_we    <= 1'b0;
   endtask
 
-  // Perform one MAC operation: C[row][col] += a * B_Seg[col]
-  task automatic do_mac(input int row, input int col, input logic [DATA_WIDTH-1:0] a);
+  // Perform one MAC operation: C[row][j] += a * B_Seg[j] for all j in tile
+  task automatic do_mac(input int row, input logic [DATA_WIDTH-1:0] a);
     @(posedge clk);
     mac_en  <= 1'b1;
     mac_row <= row[$clog2(M_MAX)-1:0];
-    mac_col <= col[$clog2(TN)-1:0];
     mac_a   <= a;
     @(posedge clk);
     mac_en  <= 1'b0;
@@ -172,18 +168,18 @@ module accel_datapath_tb;
     load_bseg(2, 32'd30);
     load_bseg(7, 32'd70);
     
-    // Verify by doing MAC with a=1 and reading result
-    // C[0][0] = 0 + 1*B_Seg[0] = 10
-    do_mac(0, 0, 32'd1);
+    // Verify by doing one vector MAC with a=1 and reading selected columns
+    do_mac(0, 32'd1);
     @(posedge clk); // wait for register update
     read_ctile(0, 0, read_val);
     `TB_CHECK(read_val == 32'd10, $sformatf("B_Seg[0] mismatch: got %0d, exp 10", read_val))
-    
-    // C[0][1] = 0 + 1*B_Seg[1] = 20
-    do_mac(0, 1, 32'd1);
-    @(posedge clk);
+
     read_ctile(0, 1, read_val);
     `TB_CHECK(read_val == 32'd20, $sformatf("B_Seg[1] mismatch: got %0d, exp 20", read_val))
+    read_ctile(0, 2, read_val);
+    `TB_CHECK(read_val == 32'd30, $sformatf("B_Seg[2] mismatch: got %0d, exp 30", read_val))
+    read_ctile(0, 7, read_val);
+    `TB_CHECK(read_val == 32'd70, $sformatf("B_Seg[7] mismatch: got %0d, exp 70", read_val))
     
     $display("[PASS] test_bseg_load");
   endtask
@@ -198,17 +194,22 @@ module accel_datapath_tb;
     u_cr.apply_reset();
     drive_defaults();
     
-    // Load B_Seg[0] = 5
+    // Load selected B_Seg entries
     load_bseg(0, 32'd5);
+    load_bseg(1, 32'd9);
     
-    // MAC 3 times: C[1][0] = 0 + 2*5 + 3*5 + 4*5 = 45
-    do_mac(1, 0, 32'd2);
-    do_mac(1, 0, 32'd3);
-    do_mac(1, 0, 32'd4);
+    // Vector MAC 3 times:
+    // C[1][0] = 0 + 2*5 + 3*5 + 4*5 = 45
+    // C[1][1] = 0 + 2*9 + 3*9 + 4*9 = 81
+    do_mac(1, 32'd2);
+    do_mac(1, 32'd3);
+    do_mac(1, 32'd4);
     
     @(posedge clk);
     read_ctile(1, 0, read_val);
     `TB_CHECK(read_val == 32'd45, $sformatf("MAC accumulate fail: got %0d, exp 45", read_val))
+    read_ctile(1, 1, read_val);
+    `TB_CHECK(read_val == 32'd81, $sformatf("MAC accumulate (col1) fail: got %0d, exp 81", read_val))
     
     $display("[PASS] test_mac_accumulate");
   endtask
@@ -225,7 +226,7 @@ module accel_datapath_tb;
     
     // Accumulate something
     load_bseg(0, 32'd10);
-    do_mac(2, 0, 32'd5);
+    do_mac(2, 32'd5);
     @(posedge clk);
     read_ctile(2, 0, read_val);
     `TB_CHECK(read_val == 32'd50, "Pre-clear value wrong")
@@ -283,13 +284,13 @@ module accel_datapath_tb;
     load_bseg(0, 32'hFFFF_FFFB);  // -5 in two's complement
     
     // C[3][0] = 0 + (-3) * (-5) = 15
-    do_mac(3, 0, 32'hFFFF_FFFD);  // -3 in two's complement
+    do_mac(3, 32'hFFFF_FFFD);  // -3 in two's complement
     @(posedge clk);
     read_ctile(3, 0, read_val);
     `TB_CHECK(read_val == 32'd15, $sformatf("Signed MAC fail: got %0d, exp 15", $signed(read_val)))
     
     // C[4][0] = 0 + 3 * (-5) = -15
-    do_mac(4, 0, 32'd3);
+    do_mac(4, 32'd3);
     @(posedge clk);
     read_ctile(4, 0, read_val);
     signed_val = $signed(read_val);
@@ -328,16 +329,14 @@ module accel_datapath_tb;
     load_bseg(0, 32'd2);
     load_bseg(1, 32'd3);
     // MAC: C[0][j] += 1 * B_Seg[j]
-    do_mac(0, 0, 32'd1);
-    do_mac(0, 1, 32'd1);
+    do_mac(0, 32'd1);
     
     // Process row 1 of A: NZ at col 1, value = 4
     // Load B row 1 into B_Seg: [5, 6]
     load_bseg(0, 32'd5);
     load_bseg(1, 32'd6);
     // MAC: C[1][j] += 4 * B_Seg[j]
-    do_mac(1, 0, 32'd4);
-    do_mac(1, 1, 32'd4);
+    do_mac(1, 32'd4);
     
     @(posedge clk);
     

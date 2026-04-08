@@ -24,7 +24,6 @@ module accel_datapath #(
     // MAC
     input  logic                     mac_en,
     input  logic [$clog2(M_MAX)-1:0] mac_row,
-    input  logic [$clog2(TN)-1:0]    mac_col,
     input  logic [DATA_WIDTH-1:0]    mac_a,
 
     // C_tile read for writeback
@@ -70,9 +69,12 @@ module accel_datapath #(
 
             // multiply and accumulate logic
             if (mac_en) begin
-                C_Tile[mac_row][mac_col] <=
-                    $signed(C_Tile[mac_row][mac_col]) +
-                    ($signed(mac_a) * $signed(B_Seg[mac_col]));
+                // One nonzero in A updates the full output tile row in parallel.
+                for (c = 0; c < TN; c++) begin
+                    C_Tile[mac_row][c] <=
+                        $signed(C_Tile[mac_row][c]) +
+                        ($signed(mac_a) * $signed(B_Seg[c]));
+                end
             end
         end
     end

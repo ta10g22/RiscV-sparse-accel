@@ -165,7 +165,6 @@ module accel_ctrl_tb;
 
   logic                      dp_mac_en;
   logic [$clog2(M_MAX)-1:0]  dp_mac_row;
-  logic [$clog2(TN)-1:0]     dp_mac_col;
   logic [DATA_WIDTH-1:0]     dp_mac_a;
 
   logic                      dp_ctile_read_en;
@@ -253,7 +252,6 @@ module accel_ctrl_tb;
 
     .dp_mac_en(dp_mac_en),
     .dp_mac_row(dp_mac_row),
-    .dp_mac_col(dp_mac_col),
     .dp_mac_a(dp_mac_a),
 
     .dp_ctile_read_en(dp_ctile_read_en),
