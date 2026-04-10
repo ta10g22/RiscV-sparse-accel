@@ -45,6 +45,7 @@ module accel_datapath #(
     logic signed [DATA_WIDTH-1:0] C_Tile [M_MAX-1:0][TN-1:0];
 
     integer r, c;
+    logic [31:0] bseg_base_u32;
 
     function automatic logic signed [DATA_WIDTH-1:0] signext_i8_from_word(
         input logic [DATA_WIDTH-1:0] word,
@@ -61,6 +62,10 @@ module accel_datapath #(
             signext_i8_from_word = DATA_WIDTH'($signed(q8));
         end
     endfunction
+
+    always_comb begin
+        bseg_base_u32 = 32'(bseg_idx);
+    end
 
     always_ff @(posedge clk or negedge n_reset) begin
         if (!n_reset) begin
@@ -81,7 +86,19 @@ module accel_datapath #(
             // write into bseg
             if (bseg_we) begin
                 if (dtype[0]) begin
-                    B_Seg[bseg_idx] <= signext_i8_from_word(bseg_wdata, bseg_idx[1:0]);
+                    // INT8 packed mode: load up to 4 consecutive lanes from one 32-bit word.
+                    if (bseg_base_u32 < TN) begin
+                        B_Seg[bseg_base_u32] <= signext_i8_from_word(bseg_wdata, 2'd0);
+                    end
+                    if ((bseg_base_u32 + 1) < TN) begin
+                        B_Seg[bseg_base_u32 + 1] <= signext_i8_from_word(bseg_wdata, 2'd1);
+                    end
+                    if ((bseg_base_u32 + 2) < TN) begin
+                        B_Seg[bseg_base_u32 + 2] <= signext_i8_from_word(bseg_wdata, 2'd2);
+                    end
+                    if ((bseg_base_u32 + 3) < TN) begin
+                        B_Seg[bseg_base_u32 + 3] <= signext_i8_from_word(bseg_wdata, 2'd3);
+                    end
                 end else begin
                     B_Seg[bseg_idx] <= $signed(bseg_wdata);
                 end

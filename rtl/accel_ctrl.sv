@@ -408,15 +408,29 @@ module accel_ctrl #(
                         dp_bseg_idx   = b_idx;
                         dp_bseg_wdata = ram_rdata;
 
-                        if (b_idx == TN-1) begin                       // if b_idx is = last element in tile
-                            b_idx_next       = b_idx;
-                            b_seg_ready_next = 1'b1;
-                            next_nz_phase    = NZ_PHASE_0;
-                            next_state       = MAC;
-                        end
-                        else begin
-                            b_idx_next       = b_idx + 1;
-                            next_nz_phase    = NZ_PHASE_3;             // go read next B element
+                        if (dtype_reg[0]) begin
+                            // INT8 mode: one packed 32-bit B read feeds 4 B_Seg lanes.
+                            if ((32'(b_idx) + 32'd3) >= (TN - 1)) begin
+                                b_idx_next       = b_idx;
+                                b_seg_ready_next = 1'b1;
+                                next_nz_phase    = NZ_PHASE_0;
+                                next_state       = MAC;
+                            end
+                            else begin
+                                b_idx_next       = b_idx + 4;
+                                next_nz_phase    = NZ_PHASE_3;
+                            end
+                        end else begin
+                            if (b_idx == TN-1) begin                       // if b_idx is = last element in tile
+                                b_idx_next       = b_idx;
+                                b_seg_ready_next = 1'b1;
+                                next_nz_phase    = NZ_PHASE_0;
+                                next_state       = MAC;
+                            end
+                            else begin
+                                b_idx_next       = b_idx + 1;
+                                next_nz_phase    = NZ_PHASE_3;             // go read next B element
+                            end
                         end
                     end
 
