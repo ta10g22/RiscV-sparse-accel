@@ -14,7 +14,7 @@ void accel_init(void)
 
 void accel_configure(uint32_t M, uint32_t N, uint32_t K, uint32_t nnz,
                      uint32_t *rowptr, uint32_t *colidx, uint32_t *values,
-                     uint32_t *B, uint32_t *C)
+                     uint32_t *B, int32_t *C)
 {
     // Set matrix dimensions
     ACCEL_REG(ACCEL_M) = M;
@@ -34,10 +34,19 @@ void accel_configure(uint32_t M, uint32_t N, uint32_t K, uint32_t nnz,
 
 void accel_start(int use_relu)
 {
+    accel_start_mode(use_relu, 0);
+}
+
+void accel_start_mode(int use_relu, int use_int8)
+{
     uint32_t ctrl = CTRL_START;
     if (use_relu)
     {
         ctrl |= CTRL_RELU;
+    }
+    if (use_int8)
+    {
+        ctrl |= CTRL_INT8;
     }
     ACCEL_REG(ACCEL_CTRL) = ctrl;
 }
@@ -68,11 +77,22 @@ int accel_is_done(void)
 
 void accel_run_spmm(uint32_t M, uint32_t N, uint32_t K, uint32_t nnz,
                     uint32_t *rowptr, uint32_t *colidx, uint32_t *values,
-                    uint32_t *B, uint32_t *C, int use_relu)
+                    uint32_t *B, int32_t *C, int use_relu)
 {
     accel_init();
     accel_configure(M, N, K, nnz, rowptr, colidx, values, B, C);
-    accel_start(use_relu);
+    accel_start_mode(use_relu, 0);
+    accel_wait_done();
+    accel_clear_done();
+}
+
+void accel_run_spmm_int8(uint32_t M, uint32_t N, uint32_t K, uint32_t nnz,
+                         uint32_t *rowptr, uint32_t *colidx, uint32_t *values_packed,
+                         uint32_t *B_packed, int32_t *C, int use_relu)
+{
+    accel_init();
+    accel_configure(M, N, K, nnz, rowptr, colidx, values_packed, B_packed, C);
+    accel_start_mode(use_relu, 1);
     accel_wait_done();
     accel_clear_done();
 }

@@ -146,6 +146,22 @@ module accel_ctrl #(
         idx2_to_byte_addr = base + ADDR_WIDTH'(idx << ADDR_SHIFT);
     endfunction
 
+    function automatic logic [DATA_WIDTH-1:0] signext_i8_from_word(
+        input logic [DATA_WIDTH-1:0] word,
+        input logic [1:0]            byte_sel
+    );
+        logic signed [7:0] q8;
+        begin
+            unique case (byte_sel)
+                2'd0: q8 = word[7:0];
+                2'd1: q8 = word[15:8];
+                2'd2: q8 = word[23:16];
+                default: q8 = word[31:24];
+            endcase
+            signext_i8_from_word = DATA_WIDTH'($signed(q8));
+        end
+    endfunction
+
 
     always_ff @(posedge clk or negedge n_reset)
     begin : SEQ
@@ -350,12 +366,20 @@ module accel_ctrl #(
                     end
                     NZ_PHASE_1: begin                               //.  store column idx value in k register
                         k_reg_next    = ram_rdata;                  //.  then load value idx p from memory location
-                        ram_addr      = idx_to_byte_addr(val_base_reg, p);
+                        if (dtype_reg[0]) begin
+                            ram_addr  = idx_to_byte_addr(val_base_reg, (p >> 2));
+                        end else begin
+                            ram_addr  = idx_to_byte_addr(val_base_reg, p);
+                        end
                         ram_re        = 1'b1;
                         next_nz_phase = NZ_PHASE_2;
                     end
                     NZ_PHASE_2: begin                                // store value index data in a register
-                        a_reg_next        = ram_rdata;               // initialize B_seg we're going to work on
+                        if (dtype_reg[0]) begin
+                            a_reg_next    = signext_i8_from_word(ram_rdata, p[1:0]);
+                        end else begin
+                            a_reg_next    = ram_rdata;
+                        end
                         b_idx_next        = '0;
                         b_seg_ready_next  = 1'b0;
                         next_nz_phase     = NZ_PHASE_3;
@@ -363,10 +387,17 @@ module accel_ctrl #(
 
                     // SYNC RAM: first issue B read
                     NZ_PHASE_3: begin
-                        ram_addr      = idx_to_byte_addr(
+                        if (dtype_reg[0]) begin
+                            ram_addr  = idx_to_byte_addr(
+                                            B_base_reg,
+                                            (((k_reg * N_reg) + (j0 + b_idx)) >> 2)
+                                        );
+                        end else begin
+                            ram_addr  = idx_to_byte_addr(
                                             B_base_reg,
                                             (k_reg * N_reg) + (j0 + b_idx)
                                         );  //load b row to work on from memory
+                        end
                         ram_re        = 1'b1;
                         next_nz_phase = NZ_PHASE_4;
                     end

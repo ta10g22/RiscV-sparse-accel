@@ -49,6 +49,7 @@ module accel_top #(
     localparam int CTRL_CLEAR_BIT  = 1;
     localparam int CTRL_IRQ_EN_BIT = 2;
     localparam int CTRL_RELU_BIT   = 3;
+    localparam int CTRL_INT8_BIT   = 4;
 
     localparam int STATUS_BUSY_BIT = 0;
     localparam int STATUS_DONE_BIT = 1;
@@ -118,6 +119,7 @@ module accel_top #(
                 CTRL_OFFSET: begin
                     ctrl_reg[CTRL_IRQ_EN_BIT] <= mmio_wdata[CTRL_IRQ_EN_BIT];
                     ctrl_reg[CTRL_RELU_BIT]   <= mmio_wdata[CTRL_RELU_BIT];
+                    ctrl_reg[CTRL_INT8_BIT]   <= mmio_wdata[CTRL_INT8_BIT];
                 end
                 M_OFFSET:          M_reg          <= mmio_wdata;
                 N_OFFSET:          N_reg          <= mmio_wdata;
@@ -152,6 +154,7 @@ module accel_top #(
                 CTRL_OFFSET: begin
                     mmio_rdata[CTRL_IRQ_EN_BIT] = ctrl_reg[CTRL_IRQ_EN_BIT];
                     mmio_rdata[CTRL_RELU_BIT]   = ctrl_reg[CTRL_RELU_BIT];
+                    mmio_rdata[CTRL_INT8_BIT]   = ctrl_reg[CTRL_INT8_BIT];
                 end
                 STATUS_OFFSET: begin
                     mmio_rdata[STATUS_BUSY_BIT] = status_busy;
@@ -197,7 +200,7 @@ module accel_top #(
         .out_base_reg     (C_base_reg),
 
         .relu_en_reg      (ctrl_reg[CTRL_RELU_BIT]),
-        .dtype_reg        (4'd0),
+        .dtype_reg        ({3'b000, ctrl_reg[CTRL_INT8_BIT]}),
 
         .status_busy      (status_busy),
         .status_done      (status_done),

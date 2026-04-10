@@ -159,6 +159,7 @@ void display_error(uint8_t code)
 #define MAX_K 64
 #define MAX_N 32
 #define MAX_A_NNZ ((MAX_M * MAX_K) / 4) // Supports up to 75% sparsity at 64x64.
+#define PACKED_WORDS(count) (((count) + 3u) >> 2)
 
 typedef enum
 {
@@ -198,10 +199,15 @@ static const benchmark_case_t benchmark_cases[] = {
 // Runtime-generated matrix storage.
 uint32_t A_rowptr[MAX_M + 1];
 uint32_t A_colidx[MAX_A_NNZ];
-uint32_t A_values[MAX_A_NNZ];
-uint32_t B_matrix[MAX_K * MAX_N];
-uint32_t C_accel[MAX_M * MAX_N];
-uint32_t C_cpu[MAX_M * MAX_N];
+int32_t A_values[MAX_A_NNZ];
+int32_t B_matrix[MAX_K * MAX_N];
+int32_t C_accel[MAX_M * MAX_N];
+int32_t C_cpu[MAX_M * MAX_N];
+int32_t C_cpu_q[MAX_M * MAX_N];
+int8_t A_values_q8[MAX_A_NNZ];
+int8_t B_matrix_q8[MAX_K * MAX_N];
+uint32_t A_values_q8_packed[PACKED_WORDS(MAX_A_NNZ)];
+uint32_t B_matrix_q8_packed[PACKED_WORDS(MAX_K * MAX_N)];
 
 static uint32_t rng_state = 1;
 
@@ -219,6 +225,72 @@ static inline uint32_t rng_next(void)
 static inline uint32_t rng_range(uint32_t limit)
 {
     return limit ? (rng_next() % limit) : 0u;
+}
+
+static inline uint32_t i32_abs_u32(int32_t v)
+{
+    return (v < 0) ? (uint32_t)(-v) : (uint32_t)v;
+}
+
+void min_max_i32(const int32_t *arr, uint32_t len, int32_t *min_v, int32_t *max_v)
+{
+    int32_t mn = 0;
+    int32_t mx = 0;
+    if (len > 0)
+    {
+        mn = arr[0];
+        mx = arr[0];
+        for (uint32_t i = 1; i < len; i++)
+        {
+            if (arr[i] < mn)
+                mn = arr[i];
+            if (arr[i] > mx)
+                mx = arr[i];
+        }
+    }
+    *min_v = mn;
+    *max_v = mx;
+}
+
+int8_t quantize_i32_to_i8(int32_t value, uint32_t max_abs)
+{
+    int32_t q;
+    uint32_t abs_v;
+    if (max_abs == 0u)
+        return 0;
+
+    abs_v = i32_abs_u32(value);
+    q = (int32_t)((abs_v * 127u + (max_abs / 2u)) / max_abs);
+    if (value < 0)
+        q = -q;
+
+    if (q > 127)
+        q = 127;
+    if (q < -128)
+        q = -128;
+    return (int8_t)q;
+}
+
+void quantize_array_i32_to_i8(const int32_t *src, uint32_t len, uint32_t max_abs, int8_t *dst)
+{
+    for (uint32_t i = 0; i < len; i++)
+        dst[i] = quantize_i32_to_i8(src[i], max_abs);
+}
+
+void pack_i8_to_u32(const int8_t *src, uint32_t len, uint32_t *dst)
+{
+    uint32_t out_idx = 0u;
+    for (uint32_t i = 0; i < len; i += 4u)
+    {
+        uint32_t word = (uint8_t)src[i];
+        if (i + 1u < len)
+            word |= ((uint32_t)(uint8_t)src[i + 1u]) << 8;
+        if (i + 2u < len)
+            word |= ((uint32_t)(uint8_t)src[i + 2u]) << 16;
+        if (i + 3u < len)
+            word |= ((uint32_t)(uint8_t)src[i + 3u]) << 24;
+        dst[out_idx++] = word;
+    }
 }
 
 const char *pattern_name(pattern_t pattern)
@@ -425,7 +497,9 @@ uint32_t generate_sparse_A_csr(const benchmark_case_t *tc, uint32_t target_nnz)
                 break;
 
             A_colidx[pos] = row_cols[i];
-            A_values[pos] = 1u + rng_range(13u);
+            A_values[pos] = (int32_t)rng_range(2047u) - 1023;
+            if (A_values[pos] == 0)
+                A_values[pos] = 1;
             pos++;
         }
 
@@ -442,7 +516,9 @@ void generate_dense_B(uint32_t K, uint32_t N)
 
     for (i = 0; i < total; i++)
     {
-        B_matrix[i] = 1u + rng_range(17u);
+        B_matrix[i] = (int32_t)rng_range(2047u) - 1023;
+        if (B_matrix[i] == 0)
+            B_matrix[i] = -1;
     }
 }
 
@@ -515,8 +591,8 @@ void uart_print_result_row(const benchmark_case_t *tc, uint32_t nnz, uint32_t cp
 // Software SpMM (CPU baseline)
 // ============================================================
 void spmm_cpu(uint32_t M, uint32_t N, uint32_t K,
-              uint32_t *rowptr, uint32_t *colidx, uint32_t *values,
-              uint32_t *B, uint32_t *C)
+              uint32_t *rowptr, uint32_t *colidx, int32_t *values,
+              int32_t *B, int32_t *C)
 {
     // Clear output
     for (uint32_t i = 0; i < M * N; i++)
@@ -533,7 +609,7 @@ void spmm_cpu(uint32_t M, uint32_t N, uint32_t K,
         for (uint32_t idx = row_start; idx < row_end; idx++)
         {
             uint32_t col = colidx[idx];
-            uint32_t val = values[idx];
+            int32_t val = values[idx];
 
             // C[row, :] += val * B[col, :]
             for (uint32_t n = 0; n < N; n++)
@@ -544,10 +620,37 @@ void spmm_cpu(uint32_t M, uint32_t N, uint32_t K,
     }
 }
 
+void spmm_cpu_q8(uint32_t M, uint32_t N,
+                 uint32_t *rowptr, uint32_t *colidx, int8_t *values_q8,
+                 int8_t *B_q8, int32_t *C)
+{
+    for (uint32_t i = 0; i < M * N; i++)
+    {
+        C[i] = 0;
+    }
+
+    for (uint32_t row = 0; row < M; row++)
+    {
+        uint32_t row_start = rowptr[row];
+        uint32_t row_end = rowptr[row + 1];
+
+        for (uint32_t idx = row_start; idx < row_end; idx++)
+        {
+            uint32_t col = colidx[idx];
+            int32_t val = (int32_t)values_q8[idx];
+
+            for (uint32_t n = 0; n < N; n++)
+            {
+                C[row * N + n] += val * (int32_t)B_q8[col * N + n];
+            }
+        }
+    }
+}
+
 // ============================================================
 // Compare arrays
 // ============================================================
-int array_compare(uint32_t *a, uint32_t *b, int len)
+int array_compare(int32_t *a, int32_t *b, int len)
 {
     for (int i = 0; i < len; i++)
     {
@@ -557,7 +660,7 @@ int array_compare(uint32_t *a, uint32_t *b, int len)
     return 0;
 }
 
-void array_clear(uint32_t *arr, int len)
+void array_clear(int32_t *arr, int len)
 {
     for (int i = 0; i < len; i++)
         arr[i] = 0;
@@ -579,12 +682,18 @@ int main(void)
 
     uart_init();
     uart_puts("\nSpMM benchmark sweep start\n");
+    uart_puts("Mode: runtime symmetric INT8 quantization (A_values, B), INT32 accumulate\n");
+    uart_puts("Pass checks quantized CPU reference vs INT8 accelerator output\n");
     uart_puts("ID,M,K,N,Sparsity,Pattern,NNZ,CPU,ACCEL,Speedup,Pass\n");
 
     for (t = 0; t < NUM_TESTS; t++)
     {
         const benchmark_case_t *tc = &benchmark_cases[t];
         uint32_t nnz;
+        uint32_t max_abs_a;
+        uint32_t max_abs_b;
+        int32_t min_a, max_a;
+        int32_t min_b, max_b;
         int pass;
 
         // Show "888888" while each test is running.
@@ -592,22 +701,41 @@ int main(void)
 
         nnz = generate_case_data(tc);
         array_clear(C_cpu, (int)(tc->M * tc->N));
+        array_clear(C_cpu_q, (int)(tc->M * tc->N));
         array_clear(C_accel, (int)(tc->M * tc->N));
 
-        // CPU baseline
-        start = read_cycles();
+        min_max_i32(A_values, nnz, &min_a, &max_a);
+        min_max_i32(B_matrix, tc->K * tc->N, &min_b, &max_b);
+        max_abs_a = i32_abs_u32(min_a);
+        if (i32_abs_u32(max_a) > max_abs_a)
+            max_abs_a = i32_abs_u32(max_a);
+        max_abs_b = i32_abs_u32(min_b);
+        if (i32_abs_u32(max_b) > max_abs_b)
+            max_abs_b = i32_abs_u32(max_b);
+        quantize_array_i32_to_i8(A_values, nnz, max_abs_a, A_values_q8);
+        quantize_array_i32_to_i8(B_matrix, tc->K * tc->N, max_abs_b, B_matrix_q8);
+
+        pack_i8_to_u32(A_values_q8, nnz, A_values_q8_packed);
+        pack_i8_to_u32(B_matrix_q8, tc->K * tc->N, B_matrix_q8_packed);
+
+        // Full-precision software reference (for quality analysis, untimed).
         spmm_cpu(tc->M, tc->N, tc->K, A_rowptr, A_colidx, A_values, B_matrix, C_cpu);
+
+        // CPU baseline in quantized arithmetic domain (fair against INT8 accelerator).
+        start = read_cycles();
+        spmm_cpu_q8(tc->M, tc->N, A_rowptr, A_colidx, A_values_q8, B_matrix_q8, C_cpu_q);
         end = read_cycles();
         cpu_cycles = end - start;
 
         // Accelerator
         start = read_cycles();
-        accel_run_spmm(tc->M, tc->N, tc->K, nnz, A_rowptr, A_colidx, A_values, B_matrix, C_accel, 0);
+        accel_run_spmm_int8(tc->M, tc->N, tc->K, nnz,
+                            A_rowptr, A_colidx, A_values_q8_packed, B_matrix_q8_packed, C_accel, 0);
         end = read_cycles();
         accel_cycles = end - start;
 
         // Compare and report
-        pass = (array_compare(C_cpu, C_accel, (int)(tc->M * tc->N)) == 0);
+        pass = (array_compare(C_cpu_q, C_accel, (int)(tc->M * tc->N)) == 0);
         if (pass)
             pass_count++;
 

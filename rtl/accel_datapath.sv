@@ -46,6 +46,22 @@ module accel_datapath #(
 
     integer r, c;
 
+    function automatic logic signed [DATA_WIDTH-1:0] signext_i8_from_word(
+        input logic [DATA_WIDTH-1:0] word,
+        input logic [1:0]            byte_sel
+    );
+        logic signed [7:0] q8;
+        begin
+            unique case (byte_sel)
+                2'd0: q8 = word[7:0];
+                2'd1: q8 = word[15:8];
+                2'd2: q8 = word[23:16];
+                default: q8 = word[31:24];
+            endcase
+            signext_i8_from_word = DATA_WIDTH'($signed(q8));
+        end
+    endfunction
+
     always_ff @(posedge clk or negedge n_reset) begin
         if (!n_reset) begin
             for (c = 0; c < TN; c++) begin
@@ -64,7 +80,11 @@ module accel_datapath #(
 
             // write into bseg
             if (bseg_we) begin
-                B_Seg[bseg_idx] <= $signed(bseg_wdata);
+                if (dtype[0]) begin
+                    B_Seg[bseg_idx] <= signext_i8_from_word(bseg_wdata, bseg_idx[1:0]);
+                end else begin
+                    B_Seg[bseg_idx] <= $signed(bseg_wdata);
+                end
             end
 
             // multiply and accumulate logic

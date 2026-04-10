@@ -39,6 +39,7 @@
 #define CTRL_CLEAR (1 << 1)  // Clear done status (auto-clears)
 #define CTRL_IRQ_EN (1 << 2) // Enable interrupt on completion
 #define CTRL_RELU (1 << 3)   // Enable ReLU activation on output
+#define CTRL_INT8 (1 << 4)   // Enable INT8 packed input mode
 
 // ============================================================
 // STATUS Register Bits
@@ -75,7 +76,7 @@ void accel_init(void);
  */
 void accel_configure(uint32_t M, uint32_t N, uint32_t K, uint32_t nnz,
                      uint32_t *rowptr, uint32_t *colidx, uint32_t *values,
-                     uint32_t *B, uint32_t *C);
+                     uint32_t *B, int32_t *C);
 
 /**
  * Start the SpMM computation
@@ -83,6 +84,14 @@ void accel_configure(uint32_t M, uint32_t N, uint32_t K, uint32_t nnz,
  * @param use_relu  If non-zero, apply ReLU activation to output
  */
 void accel_start(int use_relu);
+
+/**
+ * Start SpMM with explicit control over INT8 mode.
+ *
+ * @param use_relu  If non-zero, apply ReLU activation to output
+ * @param use_int8  If non-zero, interpret A values and B as packed signed INT8
+ */
+void accel_start_mode(int use_relu, int use_int8);
 
 /**
  * Block until computation is complete (polling)
@@ -111,6 +120,15 @@ int accel_is_done(void);
  */
 void accel_run_spmm(uint32_t M, uint32_t N, uint32_t K, uint32_t nnz,
                     uint32_t *rowptr, uint32_t *colidx, uint32_t *values,
-                    uint32_t *B, uint32_t *C, int use_relu);
+                    uint32_t *B, int32_t *C, int use_relu);
+
+/**
+ * Convenience function: configure, run in INT8 mode, and wait for completion.
+ * values and B must be packed INT8 buffers (4 signed values per 32-bit word).
+ * C remains 32-bit accumulation output.
+ */
+void accel_run_spmm_int8(uint32_t M, uint32_t N, uint32_t K, uint32_t nnz,
+                         uint32_t *rowptr, uint32_t *colidx, uint32_t *values_packed,
+                         uint32_t *B_packed, int32_t *C, int use_relu);
 
 #endif /* SPMM_ACCEL_H */
