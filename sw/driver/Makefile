@@ -41,7 +41,7 @@ TARGET = firmware
 # ============================================================
 # Build Rules
 # ============================================================
-.PHONY: all clean dump
+.PHONY: all clean dump mif install-mif
 
 all: $(TARGET).hex $(TARGET).bin
 
@@ -65,8 +65,8 @@ dump: $(TARGET).elf
 	$(OBJDUMP) -d -S $< > $(TARGET).dump
 
 # Generate MIF for Quartus synthesis (4 byte-lane files for Block RAM)
-mif: $(TARGET).hex
-	python3 hex2mif.py $< firmware.mif --split-bytes
+mif: $(TARGET).mif
+	python3 hex2mif.py $(TARGET).hex $(TARGET).mif --split-bytes
 
 # Also generate single 32-bit MIF for reference
 $(TARGET).mif: $(TARGET).hex
@@ -74,7 +74,7 @@ $(TARGET).mif: $(TARGET).hex
 
 # Copy MIF files to Quartus project directory
 install-mif: mif
-	cp firmware0.mif firmware1.mif firmware2.mif firmware3.mif ../../fpga/quartus/
+	cp firmware.mif firmware0.mif firmware1.mif firmware2.mif firmware3.mif ../../fpga/quartus/
 
 clean:
 	rm -f *.o $(TARGET).elf $(TARGET).hex $(TARGET).bin $(TARGET).dump $(TARGET).mif firmware*.mif
