@@ -2,58 +2,49 @@
 
 This repository contains a PicoRV32-based SoC with a custom SystemVerilog sparse matrix-matrix multiplication (SpMM) accelerator for the Terasic DE1-SoC FPGA board.
 
-The current integrated build is focused on one kernel:
+The implemented kernel is:
 
 - CSR-format SpMM: `C = A x B`
-- Optional ReLU on the output writeback path
-- `INT8` packed input mode for CSR values and dense `B`, with `INT32` accumulation
+- Optional ReLU on output writeback
+- Runtime symmetric `INT8` quantization mode for CSR values and dense `B` with `INT32` accumulation
 
-This repository is not currently an open-ended "AI instruction extension" platform. The implemented and benchmarked path is a memory-mapped SpMM accelerator attached to PicoRV32.
+## Final Project Status
 
-## Current Status
-
-- SoC integration working on DE1-SoC
-- PicoRV32 firmware configures and launches the accelerator through MMIO
-- Shared on-chip RAM used for firmware, matrices, and output buffers
-- UART benchmark output working from hardware
-- `INT8` packed-input mode implemented and validated
-- All 12 current hardware benchmark cases pass against the quantized CPU reference
-
-Important current constraints:
-
-- Completion is polling-based, not interrupt-driven
-- The accelerator is tiled across output columns with `TN = 8`
-- The benchmark firmware currently evaluates quantized CPU SpMM versus quantized `INT8` accelerator SpMM
+- SoC integration works on DE1-SoC
+- PicoRV32 firmware configures and launches the accelerator over MMIO
+- Shared on-chip RAM is used for firmware, matrices, and outputs
+- UART benchmark output works in hardware (`simpleuart`)
+- Parallel DSP-based MAC optimization implemented
+- Runtime `INT8` packed path implemented and validated
+- All 12 benchmark cases pass across recorded sweeps
 
 ## Architecture
 
-The implemented system consists of:
+The system consists of:
 
 - `PicoRV32` RV32IM soft-core CPU
-- `accel_top`, `accel_ctrl`, and `accel_datapath` SystemVerilog modules
+- Accelerator RTL: `accel_top`, `accel_ctrl`, `accel_datapath`
 - 64 KB on-chip RAM
 - MMIO-mapped accelerator control registers
-- GPIO output for board display
+- GPIO window for board outputs
 - `simpleuart` MMIO window for UART logging
 
-High-level accelerator behavior:
+High-level accelerator flow:
 
 1. Firmware writes matrix dimensions and buffer base addresses to MMIO registers.
-2. The controller walks CSR row pointers, column indices, and values.
-3. For each nonzero in `A`, the accelerator fetches a tile of `B`.
-4. A `TN=8` datapath performs 8 MAC updates in parallel for the current output tile.
-5. The output tile is written back to RAM, optionally with ReLU applied.
+2. Controller walks CSR row pointers, column indices, and values.
+3. For each nonzero in `A`, accelerator fetches a tile segment from `B`.
+4. `TN=8` datapath performs 8 MAC updates in parallel for the current tile.
+5. Tile is written back to RAM, optionally with ReLU.
 
 In `INT8` mode:
 
 - CSR values and dense `B` are packed as 4 signed 8-bit values per 32-bit word
-- The datapath sign-extends packed bytes back to 32-bit values internally
+- Datapath sign-extends packed bytes back to 32-bit internally
 - Accumulation remains `INT32`
-- One packed 32-bit `B` read can feed up to 4 `B` lanes, reducing memory traffic
+- One 32-bit `B` read can feed up to 4 `B` lanes
 
 ## Memory Map
-
-The integrated SoC uses the following memory map:
 
 | Address Range | Peripheral | Description |
 |---|---|---|
@@ -70,7 +61,7 @@ The integrated SoC uses the following memory map:
 | `tb/` | Unit and integration testbenches |
 | `fpga/rtl/` | DE1-SoC top-level SoC integration |
 | `fpga/quartus/` | Quartus project, constraints, generated firmware MIFs |
-| `sw/driver/` | Bare-metal PicoRV32 firmware and benchmark program |
+| `sw/driver/` | Bare-metal PicoRV32 benchmark firmware |
 | `ip/picorv32/` | Third-party PicoRV32 core and related collateral |
 | `docs/` | Report sources and project documentation |
 | `sim/` | Simulation scripts |
@@ -79,24 +70,19 @@ The integrated SoC uses the following memory map:
 
 ### Firmware
 
-Build the PicoRV32 firmware and regenerate Quartus memory images:
-
 ```bash
 cd sw/driver
 make clean
 make all mif install-mif
 ```
 
-This now updates both:
+This updates:
 
 - `sw/driver/firmware.mif`
 - `fpga/quartus/firmware.mif`
-
-as well as the split byte-lane MIFs used elsewhere in the flow.
+- split byte-lane MIF files used in the Quartus flow
 
 ### Quartus
-
-After regenerating the firmware MIFs, recompile the Quartus project so the new firmware is embedded in the FPGA image:
 
 ```bash
 cd fpga/quartus
@@ -105,80 +91,146 @@ quartus_sh --flow compile de1_soc_spmm
 
 ### Programming
 
-Example programming command:
-
 ```bash
 quartus_pgm -c USB-Blaster -m JTAG -o "p;output_files/de1_soc_spmm.sof"
 ```
 
-## Benchmark Method
+## Benchmark Input Set
 
-The current firmware:
+The same 12 benchmark IDs are used across the recorded sweeps.
 
-- generates runtime test matrices
-- stores `A` in CSR format
-- quantizes CSR values and dense `B` to signed `INT8`
-- packs those values into 32-bit words
-- times a quantized CPU reference
-- times the `INT8` accelerator
-- prints per-test cycle counts and speedup over UART
+| Test ID | M x K x N | Sparsity of A | Pattern of A | Reason |
+|---|---:|---:|---|---|
+| T1 | 8 x 8 x 8 | 75% | Uniform | Very small sanity/debug case to verify correctness on an easy example. |
+| T2 | 16 x 16 x 8 | 75% | Uniform | Small baseline case. |
+| T3 | 32 x 32 x 8 | 75% | Uniform | Medium baseline case. |
+| T4 | 64 x 64 x 8 | 75% | Uniform | Larger size scaling case. |
+| T5 | 64 x 64 x 16 | 75% | Uniform | Used to observe the effect of increasing `N`. |
+| T6 | 64 x 64 x 32 | 75% | Uniform | Used to observe scaling with a wider dense matrix. |
+| T7 | 32 x 32 x 32 | 50% | Uniform | Lower sparsity case with more non-zero values. |
+| T8 | 32 x 32 x 32 | 75% | Uniform | Mid-sparsity reference case. |
+| T9 | 32 x 32 x 32 | 90% | Uniform | Very sparse case. |
+| T10 | 32 x 32 x 32 | 75% | Row-skewed NNZ | Tests sensitivity to uneven non-zero distribution across rows. |
+| T11 | 32 x 32 x 32 | 75% | Clustered / blocky NNZ | Tests sensitivity to clustered non-zero patterns. |
+| T12 | 64 x 64 x 32 | 90% | Uniform | Larger sparse stress case. |
 
-The current hardware benchmark mode is:
+## Results 1: Baseline CPU vs Baseline CPU+Accelerator
 
-`runtime symmetric INT8 quantization (A_values, B), INT32 accumulate`
+Before enabling parallel DSP-based multi-MAC per cycle.
 
-The accelerator output is checked against the quantized CPU reference, not the full-precision software result.
-
-## Current Hardware Results
-
-Current UART sweep output on hardware:
-
-| ID | M | K | N | Sparsity | Pattern | NNZ | CPU Cycles | ACCEL Cycles | Speedup | Pass |
-|---|---:|---:|---:|---:|---|---:|---:|---:|---:|---|
-| T1 | 8 | 8 | 8 | 75 | uniform | 16 | 10735 | 567 | 18.93x | PASS |
-| T2 | 16 | 16 | 8 | 75 | uniform | 64 | 38087 | 1111 | 34.28x | PASS |
-| T3 | 32 | 32 | 8 | 75 | uniform | 256 | 142999 | 2964 | 48.25x | PASS |
-| T4 | 64 | 64 | 8 | 75 | uniform | 1024 | 553655 | 9747 | 56.80x | PASS |
-| T5 | 64 | 64 | 16 | 75 | uniform | 1024 | 1044151 | 19216 | 54.34x | PASS |
-| T6 | 64 | 64 | 32 | 75 | uniform | 1024 | 2025143 | 38171 | 53.05x | PASS |
-| T7 | 32 | 32 | 32 | 50 | uniform | 512 | 1012631 | 19216 | 52.70x | PASS |
-| T8 | 32 | 32 | 32 | 75 | uniform | 256 | 522391 | 11039 | 47.32x | PASS |
-| T9 | 32 | 32 | 32 | 90 | uniform | 102 | 227481 | 6109 | 37.24x | PASS |
-| T10 | 32 | 32 | 32 | 75 | row_skewed | 256 | 522391 | 11039 | 47.32x | PASS |
-| T11 | 32 | 32 | 32 | 75 | clustered | 256 | 522391 | 11039 | 47.32x | PASS |
-| T12 | 64 | 64 | 32 | 90 | uniform | 410 | 849333 | 18519 | 45.86x | PASS |
+| Test ID | CPU Cycles | Accelerator Cycles | Speedup | Pass/Fail | Notes |
+|---|---:|---:|---:|---|---|
+| T1 | 10373 | 856 | 12.12x | PASS | Very small sanity/debug case passed. |
+| T2 | 36573 | 2318 | 15.78x | PASS | Small baseline case. |
+| T3 | 136877 | 7809 | 17.53x | PASS | Medium baseline case. |
+| T4 | 529101 | 29195 | 18.12x | PASS | Best observed speedup in the sweep. |
+| T5 | 986829 | 58112 | 16.98x | PASS | Increasing `N` to 16 maintained strong acceleration. |
+| T6 | 1902285 | 115980 | 16.40x | PASS | Wider dense matrix case with `N=32`. |
+| T7 | 951213 | 58112 | 16.37x | PASS | Lower sparsity (50%) case still achieved strong speedup. |
+| T8 | 491693 | 30470 | 16.14x | PASS | Mid-sparsity reference case. |
+| T9 | 215263 | 13844 | 15.55x | PASS | Very sparse case with 90% sparsity. |
+| T10 | 491693 | 30470 | 16.14x | PASS | Row-skewed pattern matched reference performance in this setup. |
+| T11 | 491693 | 30470 | 16.14x | PASS | Clustered pattern matched reference performance in this setup. |
+| T12 | 800155 | 49663 | 16.11x | PASS | Larger sparse stress case. |
 
 Summary:
 
-- 12/12 cases passed
-- Observed speedup range: `18.93x` to `56.80x`
-- Best reported case in the current sweep: `T4 = 56.80x`
+- 12/12 passed
+- Speedup range: `12.12x` to `18.12x`
+- Best case: `T4 = 18.12x`
 
-## Measured INT8 Packing Effect
+## Results 2: Parallel DSP-Based MAC Update
 
-To isolate the effect of the `INT8` packed-memory path on accelerator runtime, the old and new accelerator cycle totals were compared directly:
+After enabling parallel DSP-based multiple MAC operations per clock cycle.
 
-- Total old accelerator cycles: `324,568`
-- Total new accelerator cycles: `148,737`
-- Measured accelerator-cycle reduction from `INT8` packing: `2.18x`
+| Test ID | CPU Cycles | Accelerator Cycles | Speedup | Pass/Fail | Notes |
+|---|---:|---:|---:|---|---|
+| T1 | 10373 | 737 | 14.07x | PASS | Improved small sanity/debug case after parallel MAC update. |
+| T2 | 36573 | 1859 | 19.67x | PASS | Small baseline case improved with parallel DSP usage. |
+| T3 | 136877 | 6024 | 22.72x | PASS | Medium baseline case showed strong improvement. |
+| T4 | 529101 | 22021 | 24.03x | PASS | Best observed speedup in the updated sweep. |
+| T5 | 986829 | 43781 | 22.54x | PASS | Increasing `N` to 16 still maintained strong acceleration. |
+| T6 | 1902285 | 87301 | 21.79x | PASS | Wider dense matrix case with `N=32` improved significantly. |
+| T7 | 951213 | 43781 | 21.73x | PASS | Lower sparsity (50%) case still achieved strong speedup. |
+| T8 | 491693 | 23296 | 21.11x | PASS | Mid-sparsity reference case. |
+| T9 | 215263 | 10988 | 19.59x | PASS | Very sparse case with 90% sparsity. |
+| T10 | 491693 | 23296 | 21.11x | PASS | Row-skewed pattern matched reference performance in this setup. |
+| T11 | 491693 | 23296 | 21.11x | PASS | Clustered pattern matched reference performance in this setup. |
+| T12 | 800155 | 38188 | 20.95x | PASS | Larger sparse stress case. |
 
-This number is specifically the accelerator-side effect of the packed `INT8` path. It is different from the end-to-end CPU-versus-accelerator speedup table above.
+Summary:
 
-## What The Project Currently Does Not Claim
+- 12/12 passed
+- Speedup range: `14.07x` to `24.03x`
+- Best case: `T4 = 24.03x`
+- Total accelerator cycles reduced from `427,299` to `324,568` vs baseline (`1.32x` reduction)
 
-The current integrated build does not yet demonstrate:
+## Results 3: Runtime Symmetric INT8 Quantization
 
-- end-to-end interrupt-driven completion
-- custom RISC-V instructions for accelerator invocation
-- pooling support in the active hardware/firmware path
-- a full power and area evaluation in this README
+Quantized CPU reference vs accelerator with runtime symmetric `INT8` quantization of `A_values` and `B`, with `INT32` accumulation.
 
-Those are valid future extensions, but they are not the current mainline result.
+| Test ID | CPU Cycles | Accelerator Cycles | Speedup | Pass/Fail | Notes |
+|---|---:|---:|---:|---|---|
+| T1 | 10735 | 567 | 18.93x | PASS | Quantized small sanity/debug case. |
+| T2 | 38087 | 1111 | 34.28x | PASS | Small baseline case improved strongly after INT8 quantization. |
+| T3 | 142999 | 2964 | 48.25x | PASS | Medium baseline case showed major speedup gain. |
+| T4 | 553655 | 9747 | 56.80x | PASS | Best observed speedup in the INT8 sweep. |
+| T5 | 1044151 | 19216 | 54.34x | PASS | Increasing `N` to 16 still maintained very strong acceleration. |
+| T6 | 2025143 | 38171 | 53.05x | PASS | Wider dense matrix case with `N=32` benefited significantly. |
+| T7 | 1012631 | 19216 | 52.70x | PASS | Lower sparsity (50%) case still achieved very strong speedup. |
+| T8 | 522391 | 11039 | 47.32x | PASS | Mid-sparsity reference case. |
+| T9 | 227481 | 6109 | 37.24x | PASS | Very sparse case with 90% sparsity. |
+| T10 | 522391 | 11039 | 47.32x | PASS | Row-skewed pattern matched reference performance in this setup. |
+| T11 | 522391 | 11039 | 47.32x | PASS | Clustered pattern matched reference performance in this setup. |
+| T12 | 849333 | 18519 | 45.86x | PASS | Larger sparse stress case with strong INT8 acceleration. |
 
-## Notes
+Summary:
 
-- As `N` grows beyond the tile width `TN=8`, the accelerator processes multiple output-column tiles. This repeats tile-clear, row traversal, and writeback overhead per tile.
-- Because of that, end-to-end speedup does not scale perfectly with larger `N`, even though the accelerator remains substantially faster than the CPU baseline.
+- 12/12 passed
+- Speedup range: `18.93x` to `56.80x`
+- Best case: `T4 = 56.80x`
+- Total accelerator cycles reduced from `324,568` to `148,737` vs parallel-DSP run (`2.18x` reduction)
+
+## Results 4: ARM Cortex-M0 Software vs INT8 Accelerator
+
+Cortex-M0 software SpMM compared against the same INT8 accelerator cycles used in the sweep above.
+
+| Test ID | Cortex-M0 Cycles | Accelerator Cycles | Speedup | Pass/Fail | Notes |
+|---|---:|---:|---:|---|---|
+| T1 | 2952 | 567 | 5.21x | PASS | Small sanity/debug case. |
+| T2 | 9448 | 1111 | 8.50x | PASS | Small baseline case. |
+| T3 | 31912 | 2964 | 10.77x | PASS | Medium case showed clear acceleration benefit. |
+| T4 | 116200 | 9747 | 11.92x | PASS | Best observed speedup against the Cortex-M0 baseline. |
+| T5 | 207592 | 19216 | 10.80x | PASS | Increasing `N` to 16 maintained strong speedup. |
+| T6 | 390376 | 38171 | 10.23x | PASS | Wider dense matrix case with `N=32`. |
+| T7 | 195240 | 19216 | 10.16x | PASS | Lower sparsity (50%) case still achieved strong acceleration. |
+| T8 | 104488 | 11039 | 9.47x | PASS | Mid-sparsity reference case. |
+| T9 | 46892 | 6109 | 7.68x | PASS | Very sparse case showed reduced but still strong speedup. |
+| T10 | 99748 | 11039 | 9.04x | PASS | Row-skewed pattern showed slight sensitivity on Cortex-M0. |
+| T11 | 102209 | 11039 | 9.26x | PASS | Clustered pattern remained close to the uniform reference. |
+| T12 | 169710 | 18519 | 9.16x | PASS | Larger sparse stress case. |
+
+Summary:
+
+- 12/12 passed
+- Speedup range: `5.21x` to `11.92x`
+- Best case: `T4 = 11.92x`
+
+## Key Takeaways
+
+- Parallel DSP-based MAC improved accelerator runtime before quantization.
+- INT8 packed memory path delivered the largest cycle reduction by improving effective data fetch density.
+- The strongest acceleration is observed in larger dense-width and moderate-sparsity workloads.
+- All benchmark sets remained functionally correct (`PASS` in every case).
+
+## Scope Limits
+
+This README does not claim:
+
+- interrupt-driven completion in mainline firmware (current flow is polling-based)
+- custom ISA instruction extensions for accelerator invocation
+- pooling kernels in the active benchmark path
+- full power/area characterization
 
 ## References
 
@@ -186,6 +238,3 @@ Those are valid future extensions, but they are not the current mainline result.
 - Quartus project notes: [`fpga/quartus/README.md`](fpga/quartus/README.md)
 - Driver and benchmark source: [`sw/driver/main.c`](sw/driver/main.c)
 - Accelerator register definitions: [`sw/driver/spmm_accel.h`](sw/driver/spmm_accel.h)
-
-
-by tochi
