@@ -135,52 +135,38 @@ Figure~\ref{fig:bram-dualport} shows the arrangement.
   \centering
   \begin{tikzpicture}[
     font=\small,
-    every node/.style={transform shape},
-    box/.style={draw, thick, rounded corners=2pt, minimum height=0.9cm,
-                align=center},
-    memregion/.style={draw, thick, minimum width=4.2cm, minimum height=0.7cm,
+    box/.style={draw, thick, rounded corners=2pt, minimum height=1.2cm,
+                minimum width=2.6cm, align=center},
+    memregion/.style={draw, thick, minimum width=5.2cm, minimum height=0.85cm,
                       align=center, font=\footnotesize},
-    portlabel/.style={font=\footnotesize\itshape},
+    portlabel/.style={font=\footnotesize\itshape, inner sep=1pt},
     arr/.style={-{Stealth[length=2.5mm]}, thick}
   ]
-    \node[box, fill=blue!10, minimum width=2.8cm] (cpu) at (-4.5, 0)
-      {PicoRV32\\CPU};
-    \node[box, fill=orange!15, minimum width=2.8cm] (acc) at (4.5, 0)
-      {SpMM\\Accelerator};
-
-    \node[memregion, fill=gray!10] (fw) at (0, 1.8)
-      {Firmware + stack};
-    \node[memregion, fill=gray!10] (csr) at (0, 1.0)
-      {CSR arrays (rowptr, colidx, values)};
-    \node[memregion, fill=gray!10] (bmat) at (0, 0.2)
-      {Dense matrix $B$};
-    \node[memregion, fill=gray!10] (cmat) at (0, -0.6)
-      {Output matrix $C$};
+    \node[memregion, fill=gray!10] (fw)   at (0,  2.4) {Firmware + stack};
+    \node[memregion, fill=gray!10] (csr)  at (0,  1.3) {CSR arrays (rowptr, colidx, values)};
+    \node[memregion, fill=gray!10] (bmat) at (0,  0.2) {Dense matrix $B$};
+    \node[memregion, fill=gray!10] (cmat) at (0, -0.9) {Output matrix $C$};
 
     \node[draw, thick, fit=(fw) (csr) (bmat) (cmat),
-          inner sep=4pt, rounded corners=3pt,
-          label={[font=\small\bfseries]above:64\,KB shared BRAM
-                 (\texttt{altsyncram})}] (bram) {};
+          inner sep=7pt, rounded corners=3pt,
+          label={[font=\small\bfseries, yshift=2pt]above:%
+                 64\,KB shared BRAM (\texttt{altsyncram})}] (bram) {};
 
-   % CPU to BRAM (Left side)
-  \draw[arr] (cpu.east) -- 
-      node[portlabel, midway, above=3pt] {Port~A} 
-      node[portlabel, midway, below=20pt] {byte-granular} 
-      (bram.west);
+    \node[box, fill=blue!10]   (cpu) at (-6.4, 0.75) {PicoRV32\\CPU};
+    \node[box, fill=orange!15] (acc) at ( 6.4, 0.75) {SpMM\\Accelerator};
 
-  % Accelerator to BRAM (Right side)
-  \draw[arr] (acc.west) -- 
-      node[portlabel, midway, above=3pt] {Port~B} 
-      node[portlabel, midway, below=20pt] {word-granular} 
-      (bram.east);
-
+    \draw[arr] (cpu.east) -- (bram.west |- cpu.east)
+      node[portlabel, above, midway]{Port~A}
+      node[portlabel, below, midway]{byte-granular};
+    \draw[arr] (acc.west) -- (bram.east |- acc.west)
+      node[portlabel, above, midway]{Port~B}
+      node[portlabel, below, midway]{word-granular};
   \end{tikzpicture}
   
   \caption{Dual-port BRAM organisation. The CPU and accelerator drive
            independent ports on the same memory array, so they can read or
            write different addresses on the same cycle without arbitration.
-           Concurrent access to the same address is avoided by firmware
-           scheduling.}
+           }
   \label{fig:bram-dualport}
 \end{figure}
 
