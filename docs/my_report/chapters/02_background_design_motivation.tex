@@ -1,5 +1,4 @@
 \chapter{Background and Literature Review}
-\label{ch:motivation}
 
 There is a vast body of algorithms for Sparse Matrix Multiplication (SpMM),
 as well as many different storage formats for converting sparse matrices into
@@ -19,7 +18,8 @@ each case, the fraction of nonzero entries is small enough that storing and
 operating on the matrix in dense form would be wasteful by one to five
 orders of magnitude.
 
-\begin{figure}[htbp]
+
+\begin{figure}[t]
   \centering
   \hspace*{-1.5cm}%
   \begin{tikzpicture}
@@ -56,19 +56,11 @@ orders of magnitude.
       };
     \end{axis}
   \end{tikzpicture}
-  \caption{Representative density ranges for matrices encountered in four
-           classes of modern workload. Social and citation graphs in GNN
-           benchmarks such as \texttt{ogbn-arxiv} and \texttt{Reddit} typically
-           have densities below 0.1\%~\citep{graphsage2017}; large-scale
-           recommender interaction matrices are often two orders of magnitude
-           sparser still~\citep{covington2016youtube}. Pruned CNNs sit at the
-           other end of the range, retaining 10--20\% of their weights after
-           aggressive pruning~\citep{han2016eie}. In every case, an SpMM
-           execution model that iterates only over the nonzeros avoids between
-           90\% and $>99.99$\% of the arithmetic that a dense multiply would
-           perform.}
+\caption{Representative density ranges for four workload classes. Recommender and GNN matrices (social/citation graphs) exhibit extreme sparsity ($<0.1\%$), while pruned CNNs retain 10--20\% density. By operating only on non-zero elements, SpMM avoids 90\% to $>99.99\%$ of the arithmetic required by dense multiplication.}
   \label{fig:sparsity-levels}
 \end{figure}
+
+\vspace{2cm} % Adds 2 centimeters of vertical space
 
 \subsection{Graph Neural Networks}
 

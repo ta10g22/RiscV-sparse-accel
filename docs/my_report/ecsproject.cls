@@ -171,6 +171,7 @@
   \hypersetup{pdfauthor=\authornames}
   \hypersetup{pdfkeywords=\keywordnames}
   \thispagestyle{empty}
+  \addtolength{\hoffset}{-0.5cm}%
   \begin{titlepage}
     \let\footnotesize\small
     \let\footnoterule\relax
@@ -206,6 +207,7 @@
     \@thanks
     \vfil\null
   \end{titlepage}
+  \addtolength{\hoffset}{0.5cm}%
   \setcounter{footnote}{0}%
   \global\let\thanks\relax
   \global\let\maketitle\relax
