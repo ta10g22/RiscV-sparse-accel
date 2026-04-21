@@ -56,7 +56,17 @@ orders of magnitude.
       };
     \end{axis}
   \end{tikzpicture}
-\caption{Representative density ranges for four workload classes. Recommender and GNN matrices (social/citation graphs) exhibit extreme sparsity ($<0.1\%$), while pruned CNNs retain 10--20\% density. By operating only on non-zero elements, SpMM avoids 90\% to $>99.99\%$ of the arithmetic required by dense multiplication.}
+  \caption{Representative density ranges for matrices encountered in four
+           classes of modern workload. Social and citation graphs in GNN
+           benchmarks such as \texttt{ogbn-arxiv} and \texttt{Reddit} typically
+           have densities below 0.1\%~\citep{graphsage2017}; large-scale
+           recommender interaction matrices are often two orders of magnitude
+           sparser still~\citep{covington2016youtube}. Pruned CNNs sit at the
+           other end of the range, retaining 10--20\% of their weights after
+           aggressive pruning~\citep{han2016eie}. In every case, an SpMM
+           execution model that iterates only over the nonzeros avoids between
+           90\% and $>99.99$\% of the arithmetic that a dense multiply would
+           perform.}
   \label{fig:sparsity-levels}
 \end{figure}
 
@@ -113,10 +123,11 @@ that adopt sparse attention patterns.
 
 \subsection{The FLOP-to-Bandwidth Mismatch}
 
-Dense matrix multiplication exhibits high operational intensity: for an
-$M \times K \times N$ dense GEMM, the ratio of FLOPs to bytes loaded is
-$O(N)$ when data is reused across the $N$ output columns. Sparse matrix
-multiplication loses this reuse structure. For a CSR SpMM with $\text{NNZ}$
+Dense matrix multiplication is efficient because it has high operational
+intensity: for an $M \times K \times N$ General Matrix Multiply (GEMM), many
+Floating Point Operations (FLOPs) are performed for every byte of data loaded
+from memory, with each operand reused across the $N$ output columns. Sparse
+matrix multiplication breaks this reuse pattern. For a CSR SpMM with $\text{NNZ}$
 nonzeros, the number of useful MACs per byte of CSR index data fetched is
 \[
   \text{OI} = \frac{2 \cdot \text{NNZ} \cdot N}
@@ -139,12 +150,14 @@ not designed to handle. For each nonzero $a_{ij}$, the hardware must:
   \item read the $N$ values of $B[j, :]$; and
   \item accumulate $a_{ij} \cdot B[j, n]$ into $C[i, n]$ for each column $n$.
 \end{enumerate}
-Steps (1) and (2) involve indirection: the address of the $B$ row is not known
-until the column index has been loaded. This pointer-chasing pattern breaks
-prefetching and creates a data-dependent dependency chain that is difficult for
-out-of-order processors to hide. On a simple in-order core such as PicoRV32,
-each nonzero must be handled sequentially, making the control overhead dominate
-the total execution time. Figure~\ref{fig:access-pattern} contrasts the
+Steps (1) and (2) introduce indirection, often called ``pointer-chasing''.
+Because the address of the $B$ row is not known until the column index has
+been loaded, the processor cannot predict what to fetch next. This breaks
+traditional prefetching and forces the hardware to wait, so control overhead
+rather than arithmetic becomes the primary bottleneck. On a simple in-order
+core such as PicoRV32 there is no out-of-order machinery to hide the stall,
+so every nonzero is handled sequentially and each wait is exposed directly
+in the cycle count. Figure~\ref{fig:access-pattern} contrasts the
 predictable stride of a dense traversal with the indirect, data-dependent
 address sequence that CSR SpMM produces.
 
@@ -409,6 +422,12 @@ substantial power (100--400\,W for a discrete card), DRAM for large batch sizes,
 and complex runtime support stacks. They are not viable for an embedded SoC
 implementation.
 
+\subsection{ASIC}
+
+A custom ASIC would deliver the highest throughput and lowest power for SpMM,
+but development cost, fabrication lead time, and inflexibility make ASICs
+impractical for a final-year design project.
+
 \subsection{FPGA}
 
 FPGAs offer a middle ground: custom datapath parallelism, flexible on-chip
@@ -418,15 +437,8 @@ multiplier-accumulator blocks, and configurable logic elements that can be
 combined into a bespoke SpMM datapath without the overhead of a general-purpose
 instruction set. FPGA fabric also allows the memory interface to be tailored
 exactly to the access pattern of CSR traversal, eliminating unnecessary
-transactions.
-
-\subsection{ASIC}
-
-A custom ASIC would deliver the highest throughput and lowest power for SpMM,
-but development cost, fabrication lead time, and inflexibility make ASICs
-impractical for a final-year design project. The FPGA is the natural choice
-for prototyping and validating a custom accelerator architecture before any
-ASIC commitment~\citep{nurvitadhi2017}.
+transactions. The FPGA is therefore the natural choice for prototyping and
+validating a custom accelerator architecture before any ASIC commitment.
 
 \section{INT8 Quantisation}
 
