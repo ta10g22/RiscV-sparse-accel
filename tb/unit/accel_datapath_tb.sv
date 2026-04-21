@@ -79,6 +79,98 @@ module accel_datapath_tb;
   );
 
   // ============================================================
+  //  CONCURRENT SVA ASSERTIONS
+  //
+  //  Passive monitors running for the whole simulation.  They guard
+  //  datapath invariants that must hold independently of which test
+  //  is exercising the DUT.
+  // ============================================================
+
+  // 1) When ReLU is enabled the writeback output must be non-negative
+  //    (sign bit = 0).  This is the semantic definition of ReLU.
+  property p_relu_nonneg;
+    @(posedge clk) disable iff (!n_reset)
+    (wb_en && relu_en) |-> (wb_data_out[DATA_WIDTH-1] == 1'b0);
+  endproperty
+  ast_relu_nonneg: assert property (p_relu_nonneg)
+    else $error("[SVA FAIL] dp: ReLU output negative (0x%08x) at t=%0t",
+                wb_data_out, $time);
+
+  // 2) When ReLU is disabled the writeback output must equal the input.
+  //    The writeback pipe is combinational pass-through when relu_en=0.
+  property p_wb_passthrough;
+    @(posedge clk) disable iff (!n_reset)
+    (wb_en && !relu_en) |-> (wb_data_out == wb_in);
+  endproperty
+  ast_wb_passthrough: assert property (p_wb_passthrough)
+    else $error("[SVA FAIL] dp: wb passthrough broken (in=0x%08x out=0x%08x) at t=%0t",
+                wb_in, wb_data_out, $time);
+
+  // 3) Single-command exclusivity — clear, B_Seg write, MAC, and writeback
+  //    must never fire simultaneously in the same cycle.
+  property p_dp_cmd_exclusive;
+    @(posedge clk) disable iff (!n_reset)
+    ($countones({clear_en, bseg_we, mac_en, wb_en}) <= 1);
+  endproperty
+  ast_dp_cmd_exclusive: assert property (p_dp_cmd_exclusive)
+    else $error("[SVA FAIL] dp: multiple command enables asserted at t=%0t",
+                $time);
+
+  // 4) Row / column index bounds — all enables must target legal ranges.
+  property p_mac_row_in_range;
+    @(posedge clk) disable iff (!n_reset)
+    mac_en |-> (mac_row < M_MAX);
+  endproperty
+  ast_mac_row_in_range: assert property (p_mac_row_in_range)
+    else $error("[SVA FAIL] dp: mac_row=%0d >= M_MAX=%0d at t=%0t",
+                mac_row, M_MAX, $time);
+
+  property p_bseg_idx_in_range;
+    @(posedge clk) disable iff (!n_reset)
+    bseg_we |-> (bseg_idx < TN);
+  endproperty
+  ast_bseg_idx_in_range: assert property (p_bseg_idx_in_range)
+    else $error("[SVA FAIL] dp: bseg_idx=%0d >= TN=%0d at t=%0t",
+                bseg_idx, TN, $time);
+
+
+  // ============================================================
+  //  FUNCTIONAL COVERAGE
+  //
+  //  Records which qualitatively distinct operation scenarios have
+  //  actually been exercised.  cg_mac samples every cycle that
+  //  mac_en is high — a separate coverpoint records whether the
+  //  MAC operand is positive, zero, or negative, and another
+  //  records tile row band (low / mid / high) so the random test
+  //  has a visible metric for "have I stressed the whole tile?".
+  // ============================================================
+  bit mac_operand_neg  = 1'b0;
+  bit mac_operand_zero = 1'b0;
+
+  // Classify operand sign each time MAC fires.
+  always_comb begin
+    mac_operand_neg  = mac_en && (mac_a[DATA_WIDTH-1] == 1'b1);
+    mac_operand_zero = mac_en && (mac_a == '0);
+  end
+
+  covergroup cg_mac @(posedge clk iff (mac_en && n_reset));
+    cp_row: coverpoint mac_row {
+      bins low  = {[0:15]};
+      bins mid  = {[16:47]};
+      bins high = {[48:M_MAX-1]};
+    }
+    cp_sign: coverpoint {mac_operand_neg, mac_operand_zero} {
+      bins positive = {2'b00};
+      bins zero     = {2'b01};
+      bins negative = {2'b10};
+    }
+    cx_row_sign: cross cp_row, cp_sign;
+  endgroup
+
+  cg_mac u_cg_mac = new();
+
+
+  // ============================================================
   // Helper tasks
   // ============================================================
 
@@ -357,6 +449,98 @@ module accel_datapath_tb;
   endtask
 
   // ============================================================
+  //  CLASS: DpMacTxn — one constrained-random MAC transaction
+  //
+  //  Industry-style constrained-random verification: the class holds
+  //  the rand fields; the testbench randomises it each iteration and
+  //  applies the transaction to the DUT while a parallel software
+  //  model updates the expected C_Tile.  The two are compared at the
+  //  end of the sequence.
+  // ============================================================
+  class DpMacTxn;
+    rand int unsigned row;                 // target C row (0..M_MAX-1)
+    rand logic signed [DATA_WIDTH-1:0] a;  // A-matrix operand
+
+    // Kept narrow to keep the software reference model's range reasonable
+    // and to exercise many rows without taking forever.
+    constraint c_row { row inside {[0:7]}; }
+    constraint c_a   { a inside {[-16:16]}; }
+  endclass
+
+  // ============================================================
+  // Test: constrained-random MAC scoreboard
+  //
+  // For each iteration:
+  //   1. Randomise B_Seg (known, fixed for the iteration).
+  //   2. Randomise a sequence of MAC transactions and apply to DUT.
+  //   3. Update a software model of C_Tile in lock-step.
+  //   4. Read every tile location and compare to the software model.
+  // ============================================================
+  task automatic test_random_mac_scoreboard(input int num_iters  = 10,
+                                            input int ops_per_iter = 20);
+    DpMacTxn                 txn;
+    logic signed [DATA_WIDTH-1:0] sw_bseg  [0:TN-1];
+    logic signed [DATA_WIDTH-1:0] sw_ctile [0:7][0:TN-1];  // rows 0..7
+    logic        [DATA_WIDTH-1:0] read_val;
+    int          mismatches;
+
+    $display("[TEST] test_random_mac_scoreboard (%0d iters x %0d ops)",
+             num_iters, ops_per_iter);
+
+    for (int iter = 0; iter < num_iters; iter++) begin
+      u_cr.apply_reset();
+      drive_defaults();
+
+      // Reset the software model
+      for (int r = 0; r < 8; r++)
+        for (int c = 0; c < TN; c++)
+          sw_ctile[r][c] = 0;
+
+      // -- Stage A: load a random B_Seg and mirror into the model --
+      for (int c = 0; c < TN; c++) begin
+        logic signed [DATA_WIDTH-1:0] bv;
+        bv = $random;
+        bv = bv % 32;                  // keep values small
+        sw_bseg[c] = bv;
+        load_bseg(c, bv);
+      end
+
+      // -- Stage B: apply random MAC transactions --
+      txn = new();
+      for (int op = 0; op < ops_per_iter; op++) begin
+        if (!txn.randomize())
+          `TB_FATAL("DpMacTxn.randomize() failed")
+        do_mac(txn.row, txn.a);
+        // Mirror the MAC in the software model
+        for (int c = 0; c < TN; c++)
+          sw_ctile[txn.row][c] += txn.a * sw_bseg[c];
+      end
+
+      @(posedge clk);
+
+      // -- Stage C: compare every accessible tile entry --
+      mismatches = 0;
+      for (int r = 0; r < 8; r++) begin
+        for (int c = 0; c < TN; c++) begin
+          read_ctile(r, c, read_val);
+          if ($signed(read_val) !== sw_ctile[r][c]) begin
+            $error("[SCOREBOARD] iter=%0d C[%0d][%0d] dut=%0d sw=%0d",
+                   iter, r, c, $signed(read_val), sw_ctile[r][c]);
+            mismatches++;
+          end
+        end
+      end
+      `TB_CHECK(mismatches == 0,
+                $sformatf("iter %0d: %0d scoreboard mismatches", iter, mismatches))
+      $display("[iter %2d] %0d ops verified; cg_mac coverage=%.1f%%",
+               iter, ops_per_iter, u_cg_mac.get_coverage());
+    end
+
+    $display("[PASS] test_random_mac_scoreboard  final coverage=%.1f%%",
+             u_cg_mac.get_coverage());
+  endtask
+
+  // ============================================================
   // Main
   // ============================================================
   initial begin
@@ -374,12 +558,13 @@ module accel_datapath_tb;
     drive_defaults();
 
     case (testname)
-      "bseg_load":      test_bseg_load();
-      "mac_accumulate": test_mac_accumulate();
-      "clear":          test_clear();
-      "relu":           test_relu();
-      "signed_mac":     test_signed_mac();
-      "small_spmm":     test_small_spmm();
+      "bseg_load":       test_bseg_load();
+      "mac_accumulate":  test_mac_accumulate();
+      "clear":           test_clear();
+      "relu":            test_relu();
+      "signed_mac":      test_signed_mac();
+      "small_spmm":      test_small_spmm();
+      "random_mac":      test_random_mac_scoreboard();
       "all": begin
         test_bseg_load();
         test_mac_accumulate();
@@ -387,6 +572,7 @@ module accel_datapath_tb;
         test_relu();
         test_signed_mac();
         test_small_spmm();
+        test_random_mac_scoreboard();
       end
       default: `TB_FATAL($sformatf("Unknown TEST=%s", testname))
     endcase

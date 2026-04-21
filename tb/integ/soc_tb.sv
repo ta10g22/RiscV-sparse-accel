@@ -338,6 +338,69 @@ module soc_tb;
   end
 
   // ============================================================
+  //  CONCURRENT SVA ASSERTIONS
+  //
+  //  System-level invariants that monitor the memory fabric between
+  //  the CPU, the accelerator, and the shared RAM.  All fire for the
+  //  whole simulation regardless of the firmware running.
+  // ============================================================
+
+  // 1) Address decode is mutually exclusive — a single CPU transaction
+  //    cannot be claimed by both the RAM and the accelerator regions.
+  property p_decode_exclusive;
+    @(posedge clk) disable iff (!n_reset)
+    !(sel_ram && sel_accel);
+  endproperty
+  ast_decode_exclusive: assert property (p_decode_exclusive)
+    else $error("[SVA FAIL] soc: sel_ram && sel_accel at t=%0t addr=0x%08x",
+                $time, cpu_mem_addr);
+
+  // 2) Every CPU transaction must eventually complete (ready must rise
+   //    within 1024 cycles of valid).  A long hang would indicate a
+   //    dropped response from either the RAM mux or the accelerator.
+  property p_cpu_handshake_progress;
+    @(posedge clk) disable iff (!n_reset)
+    $rose(cpu_mem_valid) |-> ##[0:1024] cpu_mem_ready;
+  endproperty
+  ast_cpu_handshake_progress: assert property (p_cpu_handshake_progress)
+    else $error("[SVA FAIL] soc: mem_valid without mem_ready within 1024 cyc at t=%0t",
+                $time);
+
+  // 3) Accelerator RAM accesses must be 32-bit aligned.
+  property p_accel_ram_aligned;
+    @(posedge clk) disable iff (!n_reset)
+    (accel_ram_re || accel_ram_we) |-> (accel_ram_addr[1:0] == 2'b00);
+  endproperty
+  ast_accel_ram_aligned: assert property (p_accel_ram_aligned)
+    else $error("[SVA FAIL] soc: accelerator unaligned RAM addr=0x%08x at t=%0t",
+                accel_ram_addr, $time);
+
+  // 4) Accelerator RAM single-port protocol — cannot simultaneously
+  //    read and write on its own port.
+  property p_accel_ram_no_simul_rw;
+    @(posedge clk) disable iff (!n_reset)
+    !(accel_ram_re && accel_ram_we);
+  endproperty
+  ast_accel_ram_no_simul_rw: assert property (p_accel_ram_no_simul_rw)
+    else $error("[SVA FAIL] soc: accelerator ram_re && ram_we at t=%0t", $time);
+
+  // 5) Accelerator IRQ mirrors its DONE transition — the assertion fires
+  //    if IRQ ever asserts without the accelerator having declared BUSY
+  //    at some point previously.  (Weak liveness: catches stuck-high IRQ
+  //    sources that would cause the firmware's polling loop to exit early.)
+  logic soc_accel_started;
+  always_ff @(posedge clk) begin
+    if (!n_reset)                        soc_accel_started <= 1'b0;
+    else if (u_accel.status_busy)        soc_accel_started <= 1'b1;
+  end
+  property p_accel_irq_valid_epoch;
+    @(posedge clk) disable iff (!n_reset)
+    $rose(accel_irq) |-> soc_accel_started;
+  endproperty
+  ast_accel_irq_valid_epoch: assert property (p_accel_irq_valid_epoch)
+    else $error("[SVA FAIL] soc: accel_irq rose before any start at t=%0t", $time);
+
+  // ============================================================
   // Debug: Print CPU activity
   // ============================================================
   always @(posedge clk) begin

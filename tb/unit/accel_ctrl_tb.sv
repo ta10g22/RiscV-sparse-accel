@@ -266,16 +266,68 @@ module accel_ctrl_tb;
     .dp_wb_data_out(dp_wb_data_out)
   );
 
-  // Cheap protocol checks
-  always_ff @(posedge clk) begin
-    if (!n_reset) begin
-      `TB_CHECK(!ram_re && !ram_we, "RAM activity during reset")
-    end else begin
-      if (ram_re || ram_we) begin
-        `TB_CHECK(ram_addr[1:0] == 2'b00, $sformatf("Unaligned RAM addr=0x%08x", ram_addr))
-      end
-    end
-  end
+  // ================================================================
+  //  CONCURRENT SVA ASSERTIONS
+  //
+  //  Passive monitors that fire every clock regardless of which test
+  //  is running.  A failing assertion stops simulation and reports
+  //  the time of failure.  These replace the older procedural
+  //  TB_CHECK block and add liveness + mutex coverage.
+  // ================================================================
+
+  // 1) Single-port BRAM — read and write strobes cannot both be high.
+  property p_ram_no_simul_rw;
+    @(posedge clk) disable iff (!n_reset)
+    !(ram_re && ram_we);
+  endproperty
+  ast_ram_no_simul_rw: assert property (p_ram_no_simul_rw)
+    else $error("[SVA FAIL] ctrl: ram_re && ram_we at t=%0t", $time);
+
+  // 2) RAM accesses must be 32-bit word-aligned.
+  property p_ram_addr_aligned;
+    @(posedge clk) disable iff (!n_reset)
+    (ram_re || ram_we) |-> (ram_addr[1:0] == 2'b00);
+  endproperty
+  ast_ram_addr_aligned: assert property (p_ram_addr_aligned)
+    else $error("[SVA FAIL] ctrl: unaligned RAM addr=0x%08x at t=%0t",
+                ram_addr, $time);
+
+  // 3) No RAM activity while the core is held in reset.
+  property p_no_ram_in_reset;
+    @(posedge clk)
+    !n_reset |-> (!ram_re && !ram_we);
+  endproperty
+  ast_no_ram_in_reset: assert property (p_no_ram_in_reset)
+    else $error("[SVA FAIL] ctrl: RAM access during reset at t=%0t", $time);
+
+  // 4) FSM status exclusivity — BUSY and DONE must never coexist.
+  property p_busy_done_mutex;
+    @(posedge clk) disable iff (!n_reset)
+    !(status_busy && status_done);
+  endproperty
+  ast_busy_done_mutex: assert property (p_busy_done_mutex)
+    else $error("[SVA FAIL] ctrl: busy && done at t=%0t", $time);
+
+  // 5) Liveness — once BUSY asserts it must eventually deassert.
+  //    Catches FSM deadlocks silently hanging simulation.
+  property p_busy_resolves;
+    @(posedge clk) disable iff (!n_reset)
+    $rose(status_busy) |-> ##[1:1_000_000] $fell(status_busy);
+  endproperty
+  ast_busy_resolves: assert property (p_busy_resolves)
+    else $error("[SVA FAIL] ctrl: BUSY never deasserted (FSM deadlock) at t=%0t",
+                $time);
+
+  // 6) Datapath control one-hot — only one of {clear_en, bseg_we, mac_en,
+  //    wb_en} may be active per cycle.  Simultaneous activation would
+  //    imply the FSM has driven conflicting operations into the datapath.
+  property p_dp_cmd_exclusive;
+    @(posedge clk) disable iff (!n_reset)
+    ($countones({dp_clear_en, dp_bseg_we, dp_mac_en, dp_wb_en}) <= 1);
+  endproperty
+  ast_dp_cmd_exclusive: assert property (p_dp_cmd_exclusive)
+    else $error("[SVA FAIL] ctrl: multiple dp_* enables asserted at t=%0t",
+                $time);
 
   // Helpers
   task automatic drive_defaults();
