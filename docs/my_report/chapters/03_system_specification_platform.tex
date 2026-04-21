@@ -1,38 +1,85 @@
 \chapter{System Design and RISC-V Platform}
 \label{ch:platform}
 
-\section{Platform Overview}
+This chapter describes the system that hosts the SpMM accelerator: what the
+SoC looks like as a whole, why a soft RISC-V core was chosen as the host, how
+memory and the bus are organised, and how firmware drives the accelerator
+through a small bank of memory-mapped registers. The accelerator itself is
+treated as a black box here; its internal datapath and optimisation are the
+subject of Chapter~\ref{ch:design}.
 
-The implemented design targets the Terasic DE1-SoC development board, which
-carries a Cyclone~V 5CSEMA5F31C6 FPGA device~\citep{de1soc_manual}. The SoC
-is synthesised entirely into the FPGA fabric; it does not use the hard ARM
-Cortex-A9 processor on the DE1-SoC's HPS. This choice keeps the design
-self-contained in the FPGA, makes cycle-level timing directly controllable
-through HDL, and avoids the complexity of AXI bridges, Linux boot, and HPS
-memory management.
+\section{System Overview}
 
-The entire benchmark path executes on-chip: firmware, CSR arrays, dense matrix
-$B$, and output matrix $C$ all reside in the shared 64\,KB dual-port block RAM.
-This simplifies the memory system and makes cycle comparisons easier to interpret
-at the cost of limiting the benchmark problem sizes to those that fit comfortably
-in on-chip memory. The design runs from the 50\,MHz on-board oscillator.
+The SoC is synthesised entirely into FPGA fabric on the Terasic DE1-SoC
+development board~\citep{de1soc_manual}. The hard ARM Cortex-A9 on the HPS side
+of the device is unused, so the whole design is self-contained in
+programmable logic. Every block in the benchmark path lives on-chip: firmware,
+CSR arrays, the dense matrix $B$, and the output matrix $C$ all reside in a
+shared 64\,KB dual-port block RAM. The design runs from the 50\,MHz on-board
+oscillator.
 
-Figure~\ref{fig:soc-block} shows the top-level block diagram of the implemented
-SoC.
+Keeping the design inside the FPGA has three consequences that shape the rest
+of this chapter. First, there is no AXI bridge, no Linux boot, and no HPS
+memory management to reason about, so cycle counts taken on the PicoRV32 core
+are directly comparable with cycle counts taken on the accelerator. Second,
+the problem sizes are bounded by on-chip capacity rather than by external
+DRAM bandwidth, which removes one variable from the comparison at the cost of
+limiting absolute problem size. Third, the software and hardware paths share
+the same memory, which makes the dual-port arrangement described in
+Section~\ref{sec:memory-arch} the central architectural decision of the
+platform.
+
+Figure~\ref{fig:soc-block} shows the top-level block diagram. The PicoRV32
+CPU, the SpMM accelerator, UART, and GPIO all hang off a simple interconnect
+that routes requests to the BRAM or to one of the memory-mapped peripheral
+regions.
 
 \begin{figure}[htbp]
     \centering
     \includegraphics[width=1\textwidth]{top_block_dia.jpg}
-    \caption{Top-level RISC-V SoC block diagram showing PicoRV32 CPU, shared
-             dual-port RAM, SpMM accelerator, UART peripheral, and GPIO
-             interface, all connected via memory-mapped I/O.}
+    \caption{Top-level RISC-V SoC block diagram.}
     \label{fig:soc-block}
 \end{figure}
 
-\section{Target FPGA: Cyclone V Resources}
+\section{Why a Soft RISC-V SoC}
 
-The Cyclone~V 5CSEMA5F31C6 device provides the following key resources
-\citep{cyclonev_handbook}:
+The host processor is PicoRV32~\citep{picorv32}, a compact RV32IM soft-core
+implementing the RISC-V base integer instruction set with the hardware integer
+multiply extension~\citep{riscv_isa}. Three practical reasons drove the
+choice.
+
+PicoRV32 is small, roughly 700 to 1000 ALMs depending on configuration, which
+leaves the majority of the Cyclone~V fabric available for the accelerator and
+the 64\,KB BRAM. It exposes the \texttt{rdcycle} performance counter CSR
+natively, so all benchmark timing in this report is cycle-accurate without
+needing an external timer or off-chip instrumentation. And its memory bus is
+a plain valid/ready handshake with address, data, and write-enable signals,
+which drops straight onto the SoC interconnect without an AXI adapter.
+
+The important caveat for interpreting the results later in this report is
+that PicoRV32 is in-order and non-pipelined. It issues one instruction at a
+time and stalls fully on every load. For a synchronous BRAM access, the CPU
+waits one cycle after presenting the address before the data is returned.
+This makes the software baseline slower than a modern superscalar CPU would
+be, which means the reported accelerator speedup is larger than it would be
+against, say, a Cortex-A class core. The comparison is still meaningful
+because the goal is to quantify the benefit of custom SpMM hardware against
+the same RV32IM ISA, not to claim absolute superiority over a desktop
+processor.
+
+The M extension matters for the same reason. The software SpMM reference uses
+hardware \texttt{MUL} instructions for the inner multiply-accumulate. Without
+it, PicoRV32 would fall back to a software multiply routine that is typically
+ten to thirty times slower, which would artificially inflate every speedup
+number in Chapter~\ref{ch:design}. The M extension is therefore a
+prerequisite for a credible software baseline.
+
+\section{Target FPGA Platform}
+
+The Cyclone~V 5CSEMA5F31C6 on the DE1-SoC provides the resources summarised
+in Table~\ref{tab:fpga-resources}~\citep{cyclonev_handbook}. The estimated
+utilisation column reports the design's approximate footprint; final
+synthesis numbers are pending completion of the Quartus timing closure study.
 
 \begin{table}[htbp]
   \centering
@@ -49,62 +96,107 @@ The Cyclone~V 5CSEMA5F31C6 device provides the following key resources
   \bottomrule
   \end{tabular}
   \caption{Cyclone~V 5CSEMA5F31C6 resource availability and estimated
-           design utilisation. Final synthesis numbers are pending completion
-           of the Quartus timing closure study.}
+           design utilisation.}
   \label{tab:fpga-resources}
 \end{table}
 
-The M10K blocks each provide 10\,Kbits (approximately 1.25\,KB) of configurable
-on-chip memory~\citep{intel_m10k}. At true-dual-port configuration with
-32-bit-wide ports, each M10K can hold 256 words. The 64\,KB BRAM used in this
-design requires approximately 16 M10K blocks in a cascaded configuration, leaving
-substantial BRAM capacity for other purposes. The DSP blocks implement
-18$\times$18-bit two's-complement signed multipliers followed by a dedicated
-accumulator register, making them well-suited to INT32 MAC operations when
-configured appropriately~\citep{intel_dsp_blocks}.
+Two resource classes are load-bearing for this design. The M10K blocks each
+provide 10\,Kbits (roughly 1.25\,KB) of configurable on-chip
+memory~\citep{intel_m10k}. In true-dual-port mode with 32-bit-wide ports,
+each M10K holds 256 words, so the 64\,KB shared BRAM needs around 16 M10Ks
+arranged as a cascade. That leaves plenty of headroom for any additional
+buffers the accelerator might want to add later. The DSP blocks provide
+18$\times$18-bit signed multipliers with a dedicated accumulator
+register~\citep{intel_dsp_blocks}, which maps cleanly onto INT32 MAC
+operations and, with the packed-byte treatment described in
+Chapter~\ref{ch:design}, onto INT8 MACs as well.
 
-\section{PicoRV32 Host Processor}
-
-The host processor is PicoRV32~\citep{picorv32}, a compact RV32IM soft-core
-implementing the RISC-V base integer instruction set with the hardware integer
-multiply extension (M)~\citep{riscv_isa}. PicoRV32 was chosen because:
-\begin{itemize}
-  \item it is small (approximately 700--1000 ALMs), leaving adequate FPGA fabric
-        for the accelerator and memory;
-  \item it supports the \texttt{rdcycle} performance counter CSR natively, which
-        is used for all cycle-accurate timing measurements; and
-  \item it exposes a simple memory bus (valid/ready handshake with address, data,
-        and write-enable signals) that maps directly onto the SoC interconnect.
-\end{itemize}
-
-PicoRV32 is an in-order, non-pipelined core. It issues one instruction at a time,
-incurring full stall cycles on every load instruction. For instructions that access
-the synchronous dual-port BRAM, the latency is one clock cycle after the address
-is presented. This is important for interpreting accelerator speedups: the CPU
-software baseline is a simple in-order core with no caching and no out-of-order
-execution, making the accelerator's advantage larger than it would be against a
-modern superscalar CPU.
-
-The M extension provides hardware 32$\times$32 integer multiply and divide. The
-software SpMM reference uses \texttt{MUL} instructions for the inner-loop
-multiply--accumulate. Without the M extension, PicoRV32 would fall back to a
-software multiply routine that is typically 10--30$\times$ slower, which would
-artificially inflate speedup numbers. The M extension is therefore required for
-a credible software baseline.
-
-\section{System Memory Map and Bus Architecture}
+\section{Memory and Interconnect Architecture}
+\label{sec:memory-arch}
 
 \subsection{Bus Protocol}
 
-The SoC interconnect uses the native PicoRV32 memory bus: a
-valid/ready handshake with a 32-bit address bus, a 32-bit bidirectional data
-bus, a 4-bit byte-enable signal, and a read/write indicator. The bus is
-synchronous to the 50\,MHz system clock. Access latency is a single cycle for
-BRAM (using the BRAM's registered output) and combinatorial for MMIO registers.
+The SoC interconnect uses the native PicoRV32 memory bus: a valid/ready
+handshake with a 32-bit address bus, a 32-bit bidirectional data bus, a
+4-bit byte-enable signal, and a read/write indicator. Everything is
+synchronous to the 50\,MHz system clock. Access latency is one cycle for
+BRAM (using the BRAM's registered output) and combinatorial for MMIO
+registers.
+
+\subsection{Dual-Port BRAM Organisation}
+
+The 64\,KB on-chip RAM is implemented as an Altera \texttt{altsyncram}
+true-dual-port memory with 32-bit-wide ports. Port~A belongs to the CPU and
+supports byte-granular writes through a 4-bit byte-enable mask. Port~B
+belongs to the accelerator and uses 32-bit word-granular access.
+Figure~\ref{fig:bram-dualport} shows the arrangement.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    font=\small,
+    every node/.style={transform shape},
+    box/.style={draw, thick, rounded corners=2pt, minimum height=0.9cm,
+                align=center},
+    memregion/.style={draw, thick, minimum width=4.2cm, minimum height=0.7cm,
+                      align=center, font=\footnotesize},
+    portlabel/.style={font=\footnotesize\itshape},
+    arr/.style={-{Stealth[length=2.5mm]}, thick}
+  ]
+    \node[box, fill=blue!10, minimum width=2.8cm] (cpu) at (-4.5, 0)
+      {PicoRV32\\CPU};
+    \node[box, fill=orange!15, minimum width=2.8cm] (acc) at (4.5, 0)
+      {SpMM\\Accelerator};
+
+    \node[memregion, fill=gray!10] (fw) at (0, 1.8)
+      {Firmware + stack};
+    \node[memregion, fill=gray!10] (csr) at (0, 1.0)
+      {CSR arrays (rowptr, colidx, values)};
+    \node[memregion, fill=gray!10] (bmat) at (0, 0.2)
+      {Dense matrix $B$};
+    \node[memregion, fill=gray!10] (cmat) at (0, -0.6)
+      {Output matrix $C$};
+
+    \node[draw, thick, fit=(fw) (csr) (bmat) (cmat),
+          inner sep=4pt, rounded corners=3pt,
+          label={[font=\small\bfseries]above:64\,KB shared BRAM
+                 (\texttt{altsyncram})}] (bram) {};
+
+   % CPU to BRAM (Left side)
+  \draw[arr] (cpu.east) -- 
+      node[portlabel, midway, above=3pt] {Port~A} 
+      node[portlabel, midway, below=20pt] {byte-granular} 
+      (bram.west);
+
+  % Accelerator to BRAM (Right side)
+  \draw[arr] (acc.west) -- 
+      node[portlabel, midway, above=3pt] {Port~B} 
+      node[portlabel, midway, below=20pt] {word-granular} 
+      (bram.east);
+
+  \end{tikzpicture}
+  
+  \caption{Dual-port BRAM organisation. The CPU and accelerator drive
+           independent ports on the same memory array, so they can read or
+           write different addresses on the same cycle without arbitration.
+           Concurrent access to the same address is avoided by firmware
+           scheduling.}
+  \label{fig:bram-dualport}
+\end{figure}
+
+Because Port~A and Port~B address the same underlying array, two accesses
+that hit the same word on the same cycle produce undefined results. The
+firmware never writes to a buffer that the accelerator is actively reading,
+and it never reads $C$ until the accelerator has signalled completion. Apart
+from that constraint, the two sides are free to operate concurrently: during
+a benchmark run, for example, the CPU can stream the previous output over
+UART on Port~A while the accelerator populates the next output on Port~B.
 
 \subsection{Address Space}
 
-Table~\ref{tab:system-memory-map} summarises the complete system memory map.
+Table~\ref{tab:system-memory-map} summarises the full memory map, and
+Figure~\ref{fig:memory-map} shows the same information as a vertical strip
+for quick reference.
 
 \begin{table}[htbp]
   \centering
@@ -128,27 +220,43 @@ Table~\ref{tab:system-memory-map} summarises the complete system memory map.
   \label{tab:system-memory-map}
 \end{table}
 
-\subsection{Dual-Port BRAM Organisation}
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    font=\footnotesize,
+    region/.style={draw, thick, minimum width=5.5cm, minimum height=1.1cm,
+                   align=center},
+    addr/.style={font=\ttfamily\footnotesize, anchor=east}
+  ]
+    \node[region, fill=blue!10]   (ram)  at (0, 3.3) {On-chip RAM \\ 64\,KB};
+    \node[region, fill=orange!15] (mmio) at (0, 2.1) {SpMM accelerator \\ MMIO};
+    \node[region, fill=green!12]  (gpio) at (0, 0.9) {GPIO \\ LEDs, switches, 7-seg};
+    \node[region, fill=purple!12] (uart) at (0,-0.3) {UART \\ \texttt{simpleuart}};
 
-The 64\,KB on-chip RAM is implemented as an Altera \texttt{altsyncram}
-true-dual-port memory with 32-bit-wide ports. Port~A is connected exclusively
-to the PicoRV32 CPU and supports byte-granular write-enable (4-bit byte
-mask). Port~B is connected exclusively to the SpMM accelerator and uses
-32-bit word-granular access. This organisation allows the CPU and accelerator
-to access different addresses simultaneously without arbitration, which is
-important during data preparation phases where the CPU writes CSR arrays
-while the previous accelerator output is being read out over UART.
+    \node[addr] at (-3.0, 3.85) {0x0000\_0000};
+    \node[addr] at (-3.0, 2.75) {0x0000\_FFFF};
+    \node[addr] at (-3.0, 2.65) {0x1000\_0000};
+    \node[addr] at (-3.0, 1.55) {0x1000\_00FF};
+    \node[addr] at (-3.0, 1.45) {0x2000\_0000};
+    \node[addr] at (-3.0, 0.35) {0x2000\_000F};
+    \node[addr] at (-3.0, 0.25) {0x2000\_0100};
+    \node[addr] at (-3.0,-0.85) {0x2000\_01FF};
+  \end{tikzpicture}
+  \caption{System memory map as a vertical address strip. Each region
+           occupies a distinct high-order address decode so that routing
+           inside the interconnect is a simple comparison on the top byte
+           of the address.}
+  \label{fig:memory-map}
+\end{figure}
 
-Both ports share the same underlying memory array, so concurrent accesses to the
-same address produce undefined results. The firmware scheduling ensures that the
-CPU does not write to active accelerator buffers during an accelerator run.
+\section{Accelerator Programming Interface}
 
-\section{Accelerator MMIO Register Interface}
-
-The accelerator exposes its control and configuration through a bank of
-memory-mapped registers accessible from the CPU at addresses
-\texttt{0x1000\_0000}--\texttt{0x1000\_002C}. Table~\ref{tab:mmio-regs} lists
-the complete register set.
+The accelerator is controlled entirely through memory-mapped registers at
+\texttt{0x1000\_0000}--\texttt{0x1000\_002C}. Firmware writes dimensions and
+base addresses, pulses the start bit, polls the status register, and reads
+the output once the done flag rises. There is no DMA engine, no interrupt
+controller, and no driver layer; the whole interface is suitable for
+bare-metal firmware. Table~\ref{tab:mmio-regs} lists the register set.
 
 \begin{table}[htbp]
   \centering
@@ -181,61 +289,109 @@ the complete register set.
   \label{tab:mmio-regs}
 \end{table}
 
-The \texttt{start} bit is asserted as a single-cycle pulse from the CPU; the
-accelerator captures it and immediately transitions from \texttt{IDLE} to its
-computation sequence. The \texttt{done} flag is asserted by the accelerator when
-all output rows have been written to RAM and remains asserted until the CPU
-writes the \texttt{clear\_done} bit. The interrupt-enable bit exists in the
-hardware but the firmware uses polling; the interrupt is reserved for future use.
+The \texttt{start} bit behaves as a one-cycle pulse: the CPU writes a 1, the
+accelerator captures it, and the bit self-clears so the CPU never has to
+clear it explicitly. \texttt{STATUS.done} is set when the last output row has
+been written back and remains high until the CPU acknowledges it by writing
+\texttt{CTRL.clear\_done}. The interrupt-enable bit exists in the hardware
+but is currently unused; the firmware polls \texttt{STATUS} instead.
 
-\section{Expected Accelerator Function}
+\section{System Operation}
 
-At system level, the accelerator is specified to:
+Figure~\ref{fig:system-sequence} shows the handshake between firmware and
+accelerator for a single SpMM run. The CPU stages all inputs in BRAM, writes
+the MMIO configuration, pulses \texttt{start}, and then polls the status
+register. The accelerator runs asynchronously on Port~B of the BRAM until it
+has written the last element of $C$, at which point it raises \texttt{done}.
+The CPU clears the flag and proceeds to read $C$.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    font=\footnotesize,
+    lane/.style={draw, thick, minimum width=5cm, minimum height=0.7cm,
+                 align=center},
+    seqbox/.style={draw, thick, rounded corners=2pt, fill=gray!10,
+                   minimum width=4.4cm, minimum height=0.7cm, align=center},
+    cpubox/.style={seqbox, fill=blue!10},
+    accbox/.style={seqbox, fill=orange!15},
+    arr/.style={-{Stealth[length=2mm]}, thick}
+  ]
+    \node[lane, fill=blue!5]   (cpuhdr) at (-3.2, 6.0) {\textbf{CPU (PicoRV32)}};
+    \node[lane, fill=orange!5] (acchdr) at ( 3.2, 6.0) {\textbf{Accelerator}};
+
+    \node[cpubox] (s1) at (-3.2, 5.0) {1. Stage CSR, $B$ in BRAM};
+    \node[cpubox] (s2) at (-3.2, 4.1) {2. Write MMIO config registers};
+    \node[cpubox] (s3) at (-3.2, 3.2) {3. Pulse \texttt{CTRL.start}};
+    \node[cpubox] (s4) at (-3.2, 2.3) {4. Poll \texttt{STATUS.done}};
+    \node[cpubox] (s5) at (-3.2, 0.5) {7. Write \texttt{CTRL.clear\_done}};
+    \node[cpubox] (s6) at (-3.2,-0.4) {8. Read output matrix $C$};
+
+    \node[accbox] (a1) at ( 3.2, 3.2) {5. Compute $C = A \times B$};
+    \node[accbox] (a2) at ( 3.2, 2.3) {\quad\,\,tile over $N$, stream $A$};
+    \node[accbox] (a3) at ( 3.2, 1.4) {6. Raise \texttt{STATUS.done}};
+
+    \draw[arr] (s3.east) -- node[above, font=\scriptsize]{\texttt{start}} (a1.west);
+    \draw[arr] (a3.west) -- node[above, font=\scriptsize]{\texttt{done}}  (s4.east);
+
+    \draw[dashed] (-6.2, 5.55) -- (6.2, 5.55);
+  \end{tikzpicture}
+  \caption{System operation sequence for a single SpMM run. Steps 1--4 and
+           7--8 execute on the CPU; steps 5--6 execute on the accelerator
+           concurrently with the CPU's polling loop. The two lanes
+           synchronise only through the \texttt{start} pulse and the
+           \texttt{done} flag.}
+  \label{fig:system-sequence}
+\end{figure}
+
+In more detail, the accelerator is specified to:
 \begin{enumerate}
-  \item read matrix dimensions $M$, $N$, $K$, and NNZ from MMIO registers;
-  \item interpret matrix $A$ in CSR form using the three base-address registers;
-  \item read dense matrix $B$ from shared RAM in row-major layout;
-  \item compute $C = A \times B$ using tiled parallel MAC operations;
-  \item optionally apply element-wise ReLU on each output element before writeback
-        when \texttt{relu\_en} is asserted; and
+  \item read the matrix dimensions $M$, $N$, $K$, and NNZ from the MMIO
+        registers when \texttt{start} is pulsed;
+  \item interpret $A$ in CSR form using the three base-address registers
+        (\texttt{A\_VAL\_BASE}, \texttt{A\_ROW\_BASE}, \texttt{A\_COL\_BASE});
+  \item read the dense matrix $B$ from shared RAM in row-major layout;
+  \item compute $C = A \times B$ using tiled parallel MAC operations across
+        the dense-output dimension;
+  \item optionally apply element-wise ReLU to each output element before
+        writeback when \texttt{relu\_en} is asserted; and
   \item signal completion by asserting \texttt{STATUS.done} and releasing
         \texttt{STATUS.busy}.
 \end{enumerate}
 
-The optional INT8 mode (\texttt{CTRL.int8\_mode}) instructs the accelerator to
-interpret the \texttt{values} array and matrix $B$ as packed INT8 rather than
-INT32, sign-extending each byte to 32 bits before multiplication.
+When \texttt{CTRL.int8\_mode} is set, the accelerator reinterprets the
+\texttt{values} array and matrix $B$ as packed signed bytes, sign-extending
+each byte to 32 bits before multiplication. The packed-byte layout and its
+effect on BRAM bandwidth is analysed in Chapter~\ref{ch:design}.
 
-\section{System-Level Requirements and Constraints}
+\section{Design Constraints and Implications}
 
-The main requirements and constraints that shaped the design are:
+Four constraints shaped the platform decisions described above.
 
-\begin{itemize}
-  \item \textbf{No external memory interface.} The design must operate
-        entirely from on-chip BRAM, avoiding the complexity and latency of an
-        SDRAM or DDR controller. This bounds the benchmark problem sizes but
-        keeps the system self-contained and the cycle counts interpretable.
+\textbf{No external memory interface.} All benchmark data lives in on-chip
+BRAM. This removes the SDRAM or DDR controller and the associated latency
+from the comparison, at the cost of bounding the problem size. In practice
+the firmware can size problems up to roughly $M = K = 64$, $N = 32$,
+depending on NNZ, before the combined CSR, $B$, and $C$ footprint exceeds
+the 64\,KB budget.
 
-  \item \textbf{Simple MMIO control.} The accelerator must be usable from
-        bare-metal firmware without an operating system or DMA engine. Register
-        writes and a polling loop are sufficient.
+\textbf{Simple MMIO control.} The accelerator must be usable from bare-metal
+firmware with no OS, no DMA engine, and no driver stack. Register writes and
+a polling loop are enough, which is why the interface is intentionally
+small.
 
-  \item \textbf{Dense-dimension tiling with $TN = 8$.} The design exploits
-        parallelism across output columns in fixed-width tiles. A tile width of
-        eight was chosen to provide meaningful parallelism (8 simultaneous MACs)
-        without exceeding Cyclone V DSP and BRAM routing limits.
+\textbf{Dense-dimension tiling with $TN = 8$.} The accelerator exploits
+parallelism across output columns in fixed-width tiles. Eight was chosen to
+provide meaningful parallelism (eight simultaneous MACs) without exceeding
+the Cyclone~V DSP and BRAM routing limits at 50\,MHz. Chapter~\ref{ch:design}
+justifies this choice against the roofline model.
 
-  \item \textbf{Reproducible cycle-accurate benchmarking.} The firmware
-        benchmark suite must be deterministic (fixed seeds), self-verifying
-        (element-by-element comparison), and cycle-accurate (using
-        \texttt{rdcycle}).
+\textbf{Reproducible cycle-accurate benchmarking.} The firmware benchmark
+suite is deterministic (fixed PRNG seeds), self-verifying (element-by-element
+comparison against a software reference), and timed using PicoRV32's
+\texttt{rdcycle} CSR. Generating data at runtime rather than loading it from
+external storage was a direct consequence of the on-chip-only constraint.
 
-  \item \textbf{Practical memory layout.} CSR arrays, matrix $B$, and output
-        matrix $C$ must all fit in the 64\,KB shared RAM alongside the firmware
-        stack and code. This constrains the maximum problem size to approximately
-        $M = K = 64$, $N = 32$, with the exact bound depending on NNZ.
-\end{itemize}
-
-These constraints explain the deliberate simplicity of the polling completion
-model, the choice of $TN = 8$ rather than a wider datapath, and the decision to
-generate benchmark data at runtime rather than loading it from external storage.
+Together these constraints explain the deliberate simplicity of the polling
+completion model, the modest tile width, and the on-chip data layout that
+the remainder of the report relies on.
