@@ -332,6 +332,179 @@ translation. The firmware preparation cost is also low: generating CSR from a
 list of nonzeros requires a single pass to count per-row nonzeros and a second
 pass to write values and indices.
 
+\section{SpMM Execution with CSR}
+\label{sec:csr-spmm-execution}
+
+The previous section explained how CSR encodes a sparse matrix. This
+section explains how a sparse--dense matrix multiply actually uses that
+encoding. The distinction matters for hardware, because the same three
+arrays that describe the storage of $A$ also drive the address generation
+of the accelerator.
+
+\subsection{Problem Statement}
+
+Given a sparse matrix $A \in \mathbb{R}^{M \times K}$, a dense matrix
+$B \in \mathbb{R}^{K \times N}$, and an output
+$C \in \mathbb{R}^{M \times N}$, the product $C = AB$ is defined
+element-wise by
+\[
+  C[i, n] \;=\; \sum_{j=0}^{K-1} A[i, j] \cdot B[j, n].
+\]
+For a dense $A$ the inner sum performs $K$ multiplies per output element,
+the vast majority of which are zero when $A$ is sparse. CSR removes those
+zeros from the loop entirely: only the nonzero entries of each row of $A$
+are enumerated, and each one contributes a scaled copy of a single row of
+$B$ to the corresponding row of $C$.
+
+\subsection{A Concrete Example}
+
+Figure~\ref{fig:spmm-dense-example} shows a $4 \times 4$ sparse $A$ matrix,
+multiplied by a $4 \times 3$ dense $B$ to produce a $4 \times 3$ output
+$C$. $A$ has five nonzeros, so only five sparse--dense interactions occur
+in the entire multiply. Each one takes a single nonzero of $A$ and a
+single row of $B$ (the row whose index equals the column index of the
+nonzero) and produces a scaled row that is accumulated into the matching
+row of $C$. The highlighted entry $A[0, 3] = 7$ picks row 3 of $B$,
+multiplies it by 7, and contributes $(70, 77, 84)$ to row 0 of $C$;
+$A[0, 0] = 3$ contributes a further $(3, 6, 9)$ from row 0 of $B$, giving
+the final $C[0, :] = (73, 83, 93)$.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+      every node/.style={font=\small},
+      mcell/.style={draw, minimum size=7mm, inner sep=0pt, anchor=center,
+                    font=\small},
+      nz/.style={fill=green!15},
+      nzpick/.style={fill=green!40},
+      rowhi/.style={fill=blue!15},
+    ]
+    \node[font=\small\bfseries] at (0, 1.85) {$A$ ($4 \times 4$ sparse)};
+    \node[font=\small\bfseries] at (4.3, 1.85) {$B$ ($4 \times 3$ dense)};
+    \node[font=\small\bfseries] at (8.3, 1.85) {$C = AB$};
+
+    \matrix (A) [matrix of nodes,
+                 nodes={mcell},
+                 column sep=-\pgflinewidth,
+                 row sep=-\pgflinewidth,
+                 nodes in empty cells] at (0, 0) {
+      |[nz]| 3 & 0 & 0 & |[nzpick]| 7 \\
+      0 & 0 & |[nz]| 2 & 0 \\
+      0 & |[nz]| 5 & 0 & 0 \\
+      0 & 0 & 0 & |[nz]| 1 \\
+    };
+
+    \node[font=\large] at (2.3, 0) {$\times$};
+
+    \matrix (B) [matrix of nodes,
+                 nodes={mcell},
+                 column sep=-\pgflinewidth,
+                 row sep=-\pgflinewidth] at (4.3, 0) {
+      1 & 2 & 3 \\
+      4 & 5 & 6 \\
+      7 & 8 & 9 \\
+      |[rowhi]| 10 & |[rowhi]| 11 & |[rowhi]| 12 \\
+    };
+
+    \node[font=\large] at (6.3, 0) {$=$};
+
+    \matrix (C) [matrix of nodes,
+                 nodes={mcell},
+                 column sep=-\pgflinewidth,
+                 row sep=-\pgflinewidth] at (8.3, 0) {
+      |[rowhi]| 73 & |[rowhi]| 83 & |[rowhi]| 93 \\
+      14 & 16 & 18 \\
+      20 & 25 & 30 \\
+      10 & 11 & 12 \\
+    };
+
+    \node[font=\scriptsize, text=black!70, align=center] at (4.3, -2.0)
+      {$A[0, 3] = 7$ picks row 3 of $B$ and contributes $7 \cdot B[3, :]$ to row 0 of $C$.};
+  \end{tikzpicture}
+  \caption{A small sparse--dense matrix multiply $C = AB$. Shaded cells of
+           $A$ are its five nonzero entries; the darker cell $A[0, 3] = 7$
+           is highlighted as a worked example. Each nonzero of $A$ scales
+           the row of $B$ whose index equals its column and accumulates
+           that scaled row into the matching row of $C$.}
+  \label{fig:spmm-dense-example}
+\end{figure}
+
+\subsection{Row-Wise CSR Execution}
+
+In CSR form, the nonzeros of $A$ are stored in row-major order as
+described in Section~2.3. The computation of $C = AB$ iterates over each
+output row and then over each nonzero in that row:
+\begin{enumerate}
+  \item For each output row $i = 0, 1, \ldots, M{-}1$, look up the row
+        bounds $p_{\mathrm{start}} = \texttt{rowptr}[i]$ and
+        $p_{\mathrm{end}} = \texttt{rowptr}[i{+}1]$.
+  \item For each $p \in [p_{\mathrm{start}}, p_{\mathrm{end}})$, read the
+        column $j = \texttt{colidx}[p]$ and the scalar
+        $a = \texttt{values}[p]$, fetch the dense row $B[j, :]$, and
+        accumulate $C[i, :] \mathrel{+}= a \cdot B[j, :]$.
+\end{enumerate}
+The inner update is a scalar-times-vector operation across the $N$ output
+columns, so one nonzero of $A$ produces $N$ useful multiplies in parallel,
+and the sparse dimension $K$ never appears as a loop variable. The
+parallelism in the hardware comes from the dense dimension, where the
+work is regular, rather than the sparse dimension, where it is not.
+
+Table~\ref{tab:spmm-walkthrough} traces the two iterations that compute
+row $i = 0$ of the example. The bounds $\texttt{rowptr}[0] = 0$ and
+$\texttt{rowptr}[1] = 2$ select two nonzeros from \texttt{colidx} and
+\texttt{values}. The first iteration uses $\texttt{values}[0] = 3$ and
+$\texttt{colidx}[0] = 0$ to fetch $B[0, :]$ and accumulate
+$3 \cdot B[0, :]$ into $C[0, :]$. The second iteration uses
+$\texttt{values}[1] = 7$ and $\texttt{colidx}[1] = 3$ to fetch $B[3, :]$
+and accumulate $7 \cdot B[3, :]$. The two partial updates sum to
+$C[0, :] = (73,\, 83,\, 93)$, agreeing with
+Figure~\ref{fig:spmm-dense-example}.
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \setlength{\tabcolsep}{6pt}
+  \begin{tabular}{cccccc}
+    \toprule
+    $p$ & \texttt{values}[p] & \texttt{colidx}[p] & $B[j, :]$ &
+        $a \times B[j, :]$ & $C[0, :]$ after update \\
+    \midrule
+    $0$ & $3$ & $0$ & $(1, 2, 3)$    & $(3, 6, 9)$    & $(3, 6, 9)$    \\
+    $1$ & $7$ & $3$ & $(10, 11, 12)$ & $(70, 77, 84)$ & $(73, 83, 93)$ \\
+    \bottomrule
+  \end{tabular}
+  \caption{Walk-through of the row-wise CSR execution for output row
+           $i = 0$ of Figure~\ref{fig:spmm-dense-example}. Each iteration
+           reads one nonzero of $A$ through the CSR arrays, fetches the
+           corresponding row of $B$, and accumulates the scalar-scaled
+           vector into $C[0, :]$.}
+  \label{tab:spmm-walkthrough}
+\end{table}
+
+\subsection{Why This Maps Well to Hardware}
+
+The execution model has three properties that suit a small FPGA
+accelerator:
+\begin{enumerate}
+  \item \emph{Address generation from three arrays.} \texttt{rowptr}
+        supplies the loop bounds for each output row, \texttt{colidx}
+        supplies the row index of $B$ to fetch, and \texttt{values}
+        supplies the scalar multiplier. No global index sort, block
+        alignment, or two-dimensional address translation is required.
+  \item \emph{Data-parallel inner update.} The scalar-vector update maps
+        onto an array of $TN$ parallel MAC units, each handling one
+        column of the output tile, so the MAC array sees regular work
+        even when the outer traversal is irregular.
+  \item \emph{Amortised irregular cost.} Each operand fetched from
+        \texttt{colidx} and \texttt{values} drives $N$ multiplies in the
+        output, so the cost of the indirect CSR lookup is spread over
+        all $N$ output columns.
+\end{enumerate}
+The control FSM described in Chapter~\ref{ch:design} implements exactly
+this loop structure, with the three CSR arrays feeding the address
+generation logic and the row of $B$ forming the operand tile that is
+multiplied against each nonzero scalar.
+
 \section{Prior Work on SpMM Accelerators}
 
 \subsection{OuterSPACE}
