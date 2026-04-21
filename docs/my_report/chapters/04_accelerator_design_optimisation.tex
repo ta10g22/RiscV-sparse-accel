@@ -204,6 +204,21 @@ confidence and timing-closure margin.
 
 \section{Memory Optimisation: the B-Segment Bottleneck}
 
+The conceptual roofline interpretation introduced in
+Section~\ref{sec:roofline} can now be made concrete for this platform.
+Operating at 50\,MHz with a $TN = 8$ parallel MAC array, the peak
+arithmetic throughput is
+\[
+  T_{\mathrm{peak}} = 8 \;\text{MACs/cycle} \;\times\; 50 \;\text{MHz}
+                    = 400 \;\text{MMACs/s}.
+\]
+A single dual-port M10K block, shared between the accelerator and the CPU,
+supplies one 32-bit read per cycle to the accelerator in the common case,
+giving an effective operand bandwidth of around 200\,MB/s. Filling one
+$TN = 8$ segment requires eight 32-bit reads, so the MAC units are stalled
+waiting for operands roughly $8\times$ more than they are computing: the
+baseline design sits well to the left of the roofline knee.
+
 In the baseline configuration, filling \texttt{B\_Seg} for a single
 nonzero requires $TN = 8$ consecutive 32-bit RAM reads. With the one-cycle
 registered latency each fill therefore takes at least $TN + 1 = 9$ cycles,

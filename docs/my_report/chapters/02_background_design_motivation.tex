@@ -74,50 +74,43 @@ orders of magnitude.
 
 \subsection{Graph Neural Networks}
 
-Graph neural networks (GNNs) represent the most rapidly growing class of workloads
-in which SpMM appears as a first-class primitive. In message-passing GNNs such as
-GraphSAGE~\citep{graphsage2017} and Graph Attention Networks~\citep{gat2018}, each
-layer computes
+Graph neural networks (GNNs) are an important and growing class of
+workloads in which SpMM appears as a first-class primitive. Each layer of
+a message-passing GNN such as GraphSAGE~\citep{graphsage2017} or a Graph
+Attention Network~\citep{gat2018} computes
 \[
   H^{(l+1)} = \sigma\!\left( \hat{A} \, H^{(l)} \, W^{(l)} \right),
 \]
-where $\hat{A}$ is the normalised sparse adjacency matrix of the input graph,
-$H^{(l)}$ is the dense feature matrix at layer $l$, and $W^{(l)}$ is a dense
-weight matrix. The product $\hat{A} \, H^{(l)}$ is a sparse--dense matrix
-multiply: $\hat{A}$ is sparse (real-world social and citation graphs can have
-densities below 0.01\%), while $H^{(l)}$ is dense with feature dimension
-typically 64--2048. This SpMM step dominates GNN inference time in practice,
-particularly for large graph datasets where $\hat{A}$ has billions of edges.
+where $\hat{A}$ is the normalised sparse adjacency matrix of the input
+graph and $H^{(l)}$ is the dense feature matrix. The product
+$\hat{A} \, H^{(l)}$ is a sparse--dense multiply that dominates inference
+time on large graphs.
 
 \subsection{Recommender Systems and Sparse Embedding Lookup}
 
-Industrial recommender systems such as the YouTube recommendation engine
-\citep{covington2016youtube} maintain item--feature embedding tables that can
-reach hundreds of millions of rows. The forward pass performs sparse embedding
-lookups that reduce to a row-gather SpMM on the interaction matrix. Because the
-interaction patterns are highly sparse and the embedding matrices are dense, the
-memory-access pattern is irregular and the workload is inherently SpMM-shaped.
+Industrial recommender systems such as the YouTube recommendation
+engine~\citep{covington2016youtube} maintain embedding tables with hundreds
+of millions of rows. The forward pass reduces to a row-gather SpMM on the
+interaction matrix, where sparse interaction patterns meet dense embedding
+rows.
 
 \subsection{Scientific Computing}
 
-In finite-element and finite-difference simulation, sparse matrices arise from
-the discretisation of differential operators on computational meshes. The
-structure of the sparse factor is dictated by the mesh topology, which is
-problem-dependent and generally irregular. SpMM in this setting appears in
-multivector iterative solvers such as block GMRES and Lanczos methods, where
-each Krylov iteration applies the sparse system matrix to a block of several
-dense vectors simultaneously.
+In finite-element and finite-difference simulation, sparse matrices arise
+from the discretisation of differential operators on computational meshes.
+SpMM appears in multivector iterative solvers such as block GMRES and
+Lanczos methods, where each iteration applies the sparse system matrix to
+a block of dense vectors.
 
 \subsection{Compressed and Pruned Neural Networks}
 
-Weight pruning removes less-significant connections from a dense neural network,
-increasing the proportion of zero weights and making weight matrices suitable for
-sparse representation. Han et al.~\citep{han2016eie} demonstrated that networks
-pruned to 80--90\% sparsity can be represented and executed in compressed form
-with significant reductions in energy and storage. When combined with INT8
-quantisation, as in the EIE design, SpMM on the compressed weight matrix becomes
-the dominant kernel. The same principle applies to attention heads in transformers
-that adopt sparse attention patterns.
+Weight pruning removes less-significant connections from a dense neural
+network, turning weight matrices into sparse ones. Han et
+al.~\citep{han2016eie} showed that networks pruned to 80--90\% sparsity
+can be executed in compressed form with large energy and storage savings;
+combined with INT8 quantisation, as in the EIE design, SpMM on the
+compressed weights becomes the dominant kernel. The same principle applies
+to sparse-attention transformers.
 
 \section{Why Sparsity Changes the Design Problem}
 
@@ -137,7 +130,7 @@ where the denominator accounts for \texttt{colidx} (4 bytes per entry),
 \texttt{values} (4 bytes per entry), \texttt{rowptr} (4 bytes per pointer), and
 the dense $B$ segment reads (4 bytes per column per nonzero). For small $N$ and
 low density, the operational intensity is significantly below the roofline knee
-of typical on-chip BRAM systems~\citep{williams2009roofline}, confirming that
+of typical on-chip BRAM systems~\citep{williams2009roofline}, indicating that
 SpMM is memory-bandwidth-limited rather than compute-limited on most platforms.
 
 \subsection{Irregular Access and Control-Flow Overhead}
@@ -150,14 +143,11 @@ not designed to handle. For each nonzero $a_{ij}$, the hardware must:
   \item read the $N$ values of $B[j, :]$; and
   \item accumulate $a_{ij} \cdot B[j, n]$ into $C[i, n]$ for each column $n$.
 \end{enumerate}
-Steps (1) and (2) introduce indirection, often called ``pointer-chasing''.
-Because the address of the $B$ row is not known until the column index has
-been loaded, the processor cannot predict what to fetch next. This breaks
-traditional prefetching and forces the hardware to wait, so control overhead
-rather than arithmetic becomes the primary bottleneck. On a simple in-order
-core such as PicoRV32 there is no out-of-order machinery to hide the stall,
-so every nonzero is handled sequentially and each wait is exposed directly
-in the cycle count. Figure~\ref{fig:access-pattern} contrasts the
+Steps (1) and (2) introduce indirection, often called ``pointer-chasing'':
+the next address depends on a value that has just been read. This breaks
+prefetching, and on an in-order core such as PicoRV32 each stall is exposed
+directly in the cycle count, so control overhead rather than arithmetic
+becomes the primary bottleneck. Figure~\ref{fig:access-pattern} contrasts the
 predictable stride of a dense traversal with the indirect, data-dependent
 address sequence that CSR SpMM produces.
 
@@ -347,110 +337,83 @@ pass to write values and indices.
 \subsection{OuterSPACE}
 
 OuterSPACE~\citep{outerspace2018} targets the SpGEMM (sparse--sparse matrix
-multiply) problem using an outer-product decomposition. Rather than traversing
-CSR rows serially, it computes partial products for each nonzero column of $A$
-and accumulates them into a merge tree. OuterSPACE achieves high throughput by
-parallelising across columns of $A$ and using dedicated on-chip accumulators.
-However, its design complexity (multiple merge stages, custom memory organisation,
-and substantial on-chip storage for partial results) makes it unsuitable for
-a constrained embedded SoC design such as the present work.
+multiply) problem using an outer-product decomposition. Rather than
+traversing CSR rows serially, it computes partial products for each nonzero
+column of $A$ and accumulates them into a merge tree, achieving high
+throughput by parallelising across columns of $A$ and using dedicated
+on-chip accumulators.
 
 \subsection{SpArch}
 
-SpArch~\citep{sparch2020} also targets sparse--sparse computation, focusing on
-the merger phase that reduces partial products to a final output. It introduces
-a condenser that reorganises partial products to maximise row-merger bandwidth.
-SpArch demonstrates that the merger step, not the multiplication step, typically
-dominates sparse--sparse computation time. While SpArch's insights are instructive,
-its target workload (sparse--sparse) is more general than SpMM (sparse--dense),
-and the design's reliance on complex inter-row scheduling is not well matched
-to the CSR traversal structure exploited in this project.
+SpArch~\citep{sparch2020} also targets sparse--sparse computation, focusing
+on the merger phase that reduces partial products to a final output. It
+introduces a condenser that reorganises partial products to maximise
+row-merger bandwidth, and shows that the merger step, not the
+multiplication step, typically dominates sparse--sparse computation time.
 
 \subsection{ExTensor}
 
-ExTensor~\citep{extensor2019} generalises sparse computation to higher-order
-tensors and introduces the concept of intersection hardware to skip pairs of
-zero operands before they reach the multiplier array. It demonstrates that
-intersection-based skipping can significantly improve efficiency over na\"ive
-zero-skipping by avoiding the memory read entirely when a nonzero pair is absent.
-The present design achieves a weaker form of zero-skipping through CSR itself:
-zero rows of $A$ produce no nonzero traversal steps, and the CSR column index
-array only points to nonzero entries. Full intersection logic would require more
-complex comparison hardware across both $A$ and $B$.
+ExTensor~\citep{extensor2019} generalises sparse computation to
+higher-order tensors and introduces intersection hardware that skips pairs
+of zero operands before they reach the multiplier array, avoiding the
+memory read entirely when a nonzero pair is absent. CSR provides a weaker
+form of this by construction: the column-index array only points to
+nonzero entries, and zero rows of $A$ produce no traversal steps at all.
 
 \subsection{SIGMA}
 
 SIGMA~\citep{sigma2020} targets the sparse-weight GEMM that arises during
 DNN training after unstructured pruning. It uses a flexible
-\textit{Forwarding Adder Network} (FAN) as a reduction tree whose connectivity
-is reconfigured at runtime to match the nonzero pattern of the weight matrix.
-SIGMA demonstrates that hardware-reconfigurable reduction topologies can match
-the irregular sparsity structure of training-time gradients, but the resource
-overhead of a general FAN is substantial and is not appropriate for a
-small-scale FPGA SoC.
+\textit{Forwarding Adder Network} (FAN) as a reduction tree whose
+connectivity is reconfigured at runtime to match the nonzero pattern of
+the weight matrix, showing that hardware-reconfigurable reduction
+topologies can absorb the irregular sparsity of training-time gradients.
 
 \subsection{Positioning This Work}
 
-All of the accelerators reviewed above target substantially larger throughput
-regimes, more aggressive scheduling mechanisms, and dedicated memory hierarchies
-that are not available on a Cyclone V FPGA. The present project is intentionally
-different in scope: it is a tightly integrated, reproducible, RTL-level
-PicoRV32-attached accelerator with shared on-chip memory, explicit MMIO control,
-and a staged optimisation narrative. The contribution is therefore not a new
-scheduling algorithm or interconnect topology, but rather a complete and clearly
-characterised implementation that demonstrates how far CSR SpMM can be pushed on
-a constrained RISC-V FPGA platform by aligning the memory format, datapath, and
+Taken together, the four designs span complementary regions of the
+sparse-acceleration space. OuterSPACE and SpArch prioritise
+high-throughput sparse--sparse accumulation, with SpArch specifically
+attacking the merger phase. ExTensor emphasises operand intersection and
+zero-pair skipping. SIGMA targets reconfigurable reduction for sparse DNN
+training. Each assumes a throughput regime, scheduling mechanism, or
+memory hierarchy that is not available on a Cyclone V FPGA. This project
+instead targets the simpler but practically relevant CSR SpMM case on a
+resource-constrained FPGA SoC, aligning the storage format, datapath, and
 quantisation strategy with the dominant cost of the workload.
 
 \section{Hardware Platform Alternatives}
 
-\subsection{CPU}
+General-purpose CPUs handle SpMM inefficiently because the irregular access
+pattern defeats prefetching and out-of-order speculation, and on a small
+in-order soft-core such as PicoRV32 there is no data cache at all. GPUs
+achieve high SpMM throughput through massive parallelism~\citep{bell_garland2009}
+but require 100--400\,W and a substantial runtime stack, which rules them
+out for an embedded SoC. A custom ASIC would deliver the best throughput
+and power, but the development cost and fabrication lead time are
+impractical for a final-year project.
 
-General-purpose CPUs offer the highest programmability but handle SpMM
-inefficiently. The irregular access pattern defeats prefetching and out-of-order
-speculation. Cache misses to scattered rows of $B$ dominate execution time at
-large problem sizes. On a small in-order soft-core such as PicoRV32, there is
-no out-of-order machinery or data cache at all, so every operand fetch to BRAM
-incurs the full BRAM latency.
-
-\subsection{GPU}
-
-GPUs achieve high SpMM throughput by exploiting massive parallelism and high
-memory bandwidth. Libraries such as cuSPARSE implement carefully tuned kernels
-for CSR SpMM on modern GPUs~\citep{bell_garland2009}. However, GPUs require
-substantial power (100--400\,W for a discrete card), DRAM for large batch sizes,
-and complex runtime support stacks. They are not viable for an embedded SoC
-implementation.
-
-\subsection{ASIC}
-
-A custom ASIC would deliver the highest throughput and lowest power for SpMM,
-but development cost, fabrication lead time, and inflexibility make ASICs
-impractical for a final-year design project.
-
-\subsection{FPGA}
-
-FPGAs offer a middle ground: custom datapath parallelism, flexible on-chip
-memory organisation, and far lower power than a GPU~\citep{nurvitadhi2017}.
-The Cyclone V FPGA on the DE1-SoC provides on-chip M10K BRAM blocks, DSP
-multiplier-accumulator blocks, and configurable logic elements that can be
-combined into a bespoke SpMM datapath without the overhead of a general-purpose
-instruction set. FPGA fabric also allows the memory interface to be tailored
-exactly to the access pattern of CSR traversal, eliminating unnecessary
-transactions. The FPGA is therefore the natural choice for prototyping and
-validating a custom accelerator architecture before any ASIC commitment.
+FPGAs provide a practical middle ground: custom datapath parallelism,
+flexible on-chip memory organisation, and far lower power than a
+GPU~\citep{nurvitadhi2017}. The Cyclone V on the DE1-SoC supplies M10K
+BRAM blocks, DSP multiplier-accumulator blocks, and configurable logic
+that can be combined into a bespoke CSR SpMM datapath with a memory
+interface tailored to the access pattern, which is a practical choice
+for prototyping an accelerator architecture before any ASIC commitment.
 
 \section{INT8 Quantisation}
 
 \subsection{Motivation}
 
-Quantisation reduces the numerical precision of stored values, decreasing memory
-footprint and potentially increasing arithmetic throughput~\citep{jacob2018,
-nagel2021}. For SpMM specifically, quantisation affects the bottleneck directly:
-if operands are stored as 8-bit integers rather than 32-bit floats, four times as
-many values can be fetched per memory transaction. Given that SpMM is
-memory-bandwidth-limited (Section~2.2), this is a particularly powerful
-optimisation.
+Quantisation reduces the numerical precision of stored values, decreasing
+memory footprint and potentially increasing arithmetic
+throughput~\citep{jacob2018, nagel2021}. For SpMM specifically, quantisation
+acts directly on the bottleneck: an un-packed 32-bit word carries one
+operand, whereas INT8 packing places four operands in the same word. For a
+memory-bound kernel this reduces the number of RAM reads needed to fill an
+operand tile by the same factor, which is the dominant reason INT8 is
+attractive for SpMM. The concrete cycle-level implications on the
+accelerator datapath are developed in Chapter~\ref{ch:design}.
 
 \subsection{Symmetric Linear Quantisation}
 
@@ -468,15 +431,6 @@ $|e_i| \leq s/2$. Symmetric quantisation was preferred over asymmetric because
 it eliminates the need for a zero-point offset in the inner MAC loop, simplifying
 the hardware accumulation logic.
 
-\subsection{Effect on Memory Traffic}
-
-In the un-packed baseline, one 32-bit memory word carries one operand. With INT8
-packing, one 32-bit word carries four operands. For a $TN = 8$ tile, filling the
-local $B$ segment buffer therefore falls from eight RAM reads to two RAM reads in
-the common case. Since RAM read latency is the dominant term in the accelerator's
-cycle budget (Section~\ref{ch:design}), this 4$\times$ reduction in operand fetch
-count translates directly into a large cycle reduction.
-
 \subsection{Accumulation Precision}
 
 INT8 accumulation into INT8 is insufficient for most practical workloads:
@@ -488,35 +442,17 @@ overflow. This matches the widely adopted practice of INT8$\times$INT8 with INT3
 accumulation as described by Jacob et al.~\citep{jacob2018}.
 
 \section{Roofline Analysis and Design Implications}
+\label{sec:roofline}
 
-The roofline model~\citep{williams2009roofline} characterises whether a kernel
-is compute-bound (throughput limited by the peak FLOP rate) or
-memory-bound (throughput limited by available bandwidth). The position of a
-kernel on the roofline is determined by its \emph{arithmetic intensity}: the
-ratio of floating-point operations to bytes of off-chip data movement.
-
-For the baseline accelerator on a Cyclone~V device operating at 50\,MHz with a
-$TN = 8$ parallel MAC array, the peak throughput is
-\[
-  T_{\mathrm{peak}} = 8 \;\text{MACs/cycle} \;\times\; 50 \;\text{MHz}
-                    = 400 \;\text{MMACs/s}.
-\]
-With 32-bit operands, the on-chip BRAM bandwidth for a single dual-port block is
-two 32-bit reads per cycle, giving 400\,MB/s. For $TN = 8$ fully utilised,
-eight reads per cycle are needed to fill the $B$ segment, but the accelerator
-shares a single port with the CPU and issues reads sequentially. Thus, even at
-$TN = 8$, the MAC units are stalled waiting for RAM reads approximately
-$\frac{8}{1} = 8\times$ more than they are computing. This analysis confirms that
-the accelerator is memory-bandwidth-limited in the baseline configuration.
-
-INT8 packing reduces the number of required reads from eight to two, moving the
-design's operating point along the roofline x-axis towards the compute-bound
-region. This is the theoretical basis for the large speedup gain observed in the
-INT8 stage, and is consistent with the $2.18\times$ cycle reduction observed
-across the 12-case sweep. Figure~\ref{fig:roofline} illustrates the shift:
-the baseline design sits well to the left of the roofline knee, where
-throughput is bounded by memory bandwidth, and INT8 packing moves it towards
-the compute-bound plateau.
+The roofline model~\citep{williams2009roofline} characterises whether a
+kernel is compute-bound (throughput limited by the peak arithmetic rate)
+or memory-bound (throughput limited by available bandwidth). The position
+of a kernel on the roofline is determined by its \emph{arithmetic
+intensity}: the ratio of arithmetic operations to bytes of data movement.
+A kernel whose intensity places it to the left of the roofline knee is
+memory-bound, and its achievable throughput scales linearly with
+bandwidth; one placed to the right is compute-bound, and its throughput
+is capped by the peak arithmetic rate.
 
 \begin{figure}[htbp]
   \centering
@@ -571,3 +507,16 @@ the compute-bound plateau.
            upward along the bandwidth roof towards the compute-bound region.}
   \label{fig:roofline}
 \end{figure}
+
+
+SpMM sits firmly in the memory-bound regime for the reasons developed in
+Section~2.2: low operand reuse and indirect access keep the arithmetic
+intensity well below the knee. The practical implication for accelerator
+design is that widening the MAC array yields only a small gain unless
+operand supply is widened alongside it. Quantisation addresses this
+directly by increasing the number of useful operands packed into each
+memory transaction, moving the design's operating point along the
+bandwidth roof towards the compute-bound plateau. A numerical
+instantiation of this argument for the present $TN = 8$ accelerator is
+given in Chapter~\ref{ch:design}, and Figure~\ref{fig:roofline}
+illustrates the qualitative shift that INT8 packing produces.
