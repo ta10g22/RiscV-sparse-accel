@@ -1,0 +1,284 @@
+\chapter{Testing and Verification}
+\label{ch:methodology}
+
+\section{Verification Approach}
+
+Verification was carried out at two complementary levels: RTL-level
+simulation before synthesis, and hardware-level functional verification
+on the physical FPGA after programming. This two-level approach is
+standard in digital design practice~\citep{sze2017}. RTL simulation is
+fast and exposes internal signals for inspection, but it cannot on its
+own guarantee that timing closure and synthesis artefacts have not
+introduced discrepancies between the simulated and deployed design;
+hardware verification on the device closes that gap by exercising the
+complete SoC end-to-end. A discrepancy at either level is sufficient to
+fail a case, and every recorded cycle count in Chapter~\ref{ch:results}
+was taken from a run that passed both.
+
+Within the simulation level the testbench suite was deliberately
+structured to combine the three verification styles used in
+industry-grade digital flows: \emph{directed tests} for targeted
+functional cases with hand-computed golden outputs, \emph{concurrent
+SystemVerilog Assertions (SVA)} for always-on protocol and liveness
+monitoring, and \emph{constrained-random stimulus with functional
+coverage and a scoreboard} for exploring the input space beyond what
+directed tests reach. Four SystemVerilog testbenches cover the design:
+three unit testbenches under \texttt{tb/unit/} that target the
+accelerator modules in isolation, and one integration testbench under
+\texttt{tb/integ/} that exercises the full synthesisable SoC with
+firmware loaded into a behavioural RAM model.
+
+\subsection*{Unit Testbench: Datapath}
+
+\texttt{accel\_datapath\_tb.sv} exercises the arithmetic datapath in
+isolation. It contains six directed tests covering $B_\mathrm{Seg}$
+load, MAC accumulation, C-tile clear, ReLU activation (positive, zero,
+and negative inputs), signed MAC with negative operands, and a small
+hand-computed $2 \times 2$ SpMM. On top of the directed tests the
+testbench runs a constrained-random MAC-scoreboard test: a transaction
+class with \texttt{rand} row and operand fields is randomised for each
+of twenty MAC operations per iteration, and a parallel software model
+of the C-tile is updated in lock-step with the DUT. At the end of each
+iteration every accessible C-tile location is read back and compared
+against the software reference; any mismatch is reported with the
+exact $(\mathrm{row}, \mathrm{col})$ index and stops the test. Five
+concurrent SVA properties run for the entire simulation: ReLU output
+non-negativity when enabled, writeback pass-through when disabled,
+one-hot datapath command exclusivity (clear, $B_\mathrm{Seg}$ write,
+MAC, and writeback may not fire simultaneously), MAC row index in
+range, and $B_\mathrm{Seg}$ index in range. A functional covergroup
+records MAC row band (low / mid / high) crossed with operand sign
+(positive / zero / negative) so that the random test has a visible
+coverage metric for how much of the tile and operand space has been
+exercised.
+
+\subsection*{Unit Testbench: Control FSM}
+
+\texttt{accel\_ctrl\_tb.sv} verifies control-path behaviour by
+instantiating the control module together with a synchronous RAM model
+with the same one-cycle read latency as the deployed BRAM, plus a
+datapath stub. Six concurrent SVA properties monitor the FSM's external
+contract for the whole simulation: single-port RAM exclusivity (read
+and write strobes may not be simultaneously high), 32-bit address
+alignment on every RAM access, quiescence of the RAM interface during
+reset, mutual exclusion of the \texttt{BUSY} and \texttt{DONE} status
+bits, FSM liveness (every \texttt{BUSY} rise must be followed by a
+\texttt{BUSY} fall within one million cycles), and one-hot exclusivity
+of the four datapath command outputs (\texttt{dp\_clear\_en},
+\texttt{dp\_bseg\_we}, \texttt{dp\_mac\_en}, \texttt{dp\_wb\_en}). A
+directed smoke test drives the FSM through a full start--busy--done
+cycle and checks that the IRQ line asserts correctly when
+\texttt{irq\_en} is set.
+
+\subsection*{Unit Testbench: Accelerator Top}
+
+\texttt{accel\_top\_tb.sv} is the most comprehensive unit testbench and
+closes the loop across the MMIO front-end, the FSM, and the datapath.
+Stimulus is structured into two classes following the
+\emph{transaction / driver} pattern common in UVM-style flows but
+implemented in plain SystemVerilog: \texttt{SpmmConfig} is a
+transaction object with \texttt{rand} fields for $M$, $N$, $K$, and
+\texttt{relu\_en} and an embedded covergroup over the relevant
+combinations; \texttt{accel\_drivers} holds a virtual handle to the
+DUT's MMIO interface and implements the \texttt{mmio\_read},
+\texttt{mmio\_write}, and \texttt{wait\_done} protocol tasks so that
+every test uses the same low-level interface sequencing. Five directed
+tests verify MMIO register read/write coverage, the empty-matrix
+($\mathrm{NNZ} = 0$) case, a hand-computed $2 \times 2 \times 8$ SpMM,
+ReLU clamping of a negative partial sum, and the BUSY-mirror LED. A
+sixth constrained-random test randomises twenty \texttt{SpmmConfig}
+objects, runs each one through the full accelerator end-to-end, reads
+back the output C matrix, and verifies element-by-element that it
+matches the trivially computable all-zero golden output; after each
+iteration the covergroup sampling is reported so that coverage
+convergence is visible during simulation. Five concurrent SVA
+properties guard invariants that must hold across every one of these
+tests: single-port RAM exclusivity, RAM address alignment, reset
+quiescence, \texttt{BUSY}/\texttt{DONE} status mutex, and top-level FSM
+liveness. Different simulation seeds (\texttt{+SEED=N}) exercise
+different configuration combinations; coverage-driven regressions
+simply increase the seed count until every bin of the covergroup is
+hit.
+
+\subsection*{Integration Testbench: Full SoC}
+
+\texttt{soc\_tb.sv} instantiates PicoRV32 together with the accelerator
+and a 64\,KB behavioural RAM, loads the compiled firmware image into
+the RAM via \texttt{\$readmemh}, releases reset, and lets the firmware
+execute its full benchmark sequence until the CPU writes a sentinel
+value to a pre-agreed result address. This closes the loop between the
+software control flow described in Chapter~\ref{ch:firmware} and the
+hardware being verified: any firmware change that breaks the MMIO
+contract, any RTL change that breaks the firmware's assumed timing, or
+any memory-map misconfiguration fails immediately in simulation before
+being committed to a synthesis run. Five concurrent SVA properties
+monitor the shared memory fabric: address-decode exclusivity between
+the RAM region and the accelerator MMIO region, bounded CPU handshake
+progress (\texttt{mem\_ready} must rise within 1024 cycles of
+\texttt{mem\_valid}), accelerator RAM 32-bit address alignment,
+accelerator RAM single-port exclusivity, and an IRQ-epoch guard that
+ensures the accelerator's IRQ line can only rise after the accelerator
+has actually been started.
+
+\subsection*{Shared Infrastructure}
+
+All four testbenches share the support files under \texttt{tb/common/}:
+\texttt{clk\_reset.sv} provides the clock generator and reset task,
+\texttt{tb\_pkg.sv} provides plusarg helpers
+(\texttt{get\_plusarg\_int}, \texttt{has\_plusarg}) so every testbench
+accepts \texttt{+SEED} and \texttt{+WAVES} uniformly,
+\texttt{tb\_macros.svh} defines the line-number-tagged
+\texttt{TB\_CHECK} and \texttt{TB\_FATAL} PASS/FAIL macros, and
+\texttt{tb\_regmap.svh} centralises the MMIO register offsets and bit
+positions so that they are declared once and \texttt{`include}d
+everywhere, preventing silent drift between testbenches and RTL.
+
+\subsection*{Hardware-Level Verification}
+
+Hardware-level verification is embedded directly inside the firmware
+benchmark harness described in Section~\ref{sec:data-prep}. For each
+of the 12 cases and at each of the three accelerator stages, firmware
+generates deterministic inputs from fixed seeds, computes the
+quantised CPU reference using the \texttt{spmm\_cpu\_q8()} routine,
+runs the accelerator on the same inputs, and invokes the
+\texttt{array\_compare()} scoreboard to verify every element of the
+accelerator output matches the software reference exactly. This
+routine functions as a hardware-level golden-reference scoreboard: it
+covers all $M \times N$ output elements on every run, and a single
+incorrect element causes the case to fail and no performance number
+to be recorded. The combination of RTL-level SVA monitoring,
+randomised-scoreboard unit testbenches, and firmware-level
+element-wise comparison on real silicon provides three independent
+layers of functional checking before any cycle count is reported.
+
+\section{Benchmark Suite Design}
+\label{sec:bench-design}
+
+The benchmark suite was designed to cover multiple independent axes of
+performance variation so that the reasons behind speedup trends can be
+identified analytically rather than anecdotally. Four axes were chosen:
+matrix size ($M$, $K$), which governs the amortisation of fixed setup
+overhead; dense output width $N$, which determines the number of tile
+columns and the ratio of tile-management cycles to useful computation;
+sparsity level, which sets NNZ and therefore the volume of useful
+arithmetic per row traversal; and nonzero distribution pattern, which
+exposes any sensitivity of the accelerator or CPU to the spatial layout
+of the nonzeros. Table~\ref{tab:benchmark-inputs} lists all 12 cases
+together with the axis of variation each one primarily addresses.
+
+\begin{table}[htbp]
+  \centering
+  \scriptsize
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{llrp{2.6cm}p{5.4cm}}
+  \toprule
+  Test ID & $M \times K \times N$ & Sparsity & Pattern & Purpose \\
+  \midrule
+  T1  & $8 \times 8 \times 8$    & 75\% & Uniform &
+    Small debug/sanity case; establishes minimum speedup in the suite. \\
+  T2  & $16 \times 16 \times 8$  & 75\% & Uniform &
+    Small size-scaling point; 4$\times$ more arithmetic than T1. \\
+  T3  & $32 \times 32 \times 8$  & 75\% & Uniform &
+    Medium size-scaling point. \\
+  T4  & $64 \times 64 \times 8$  & 75\% & Uniform &
+    Largest square case; maximum $M$ for the current $M_{\max} = 64$. \\
+  T5  & $64 \times 64 \times 16$ & 75\% & Uniform &
+    Tests effect of doubling dense width relative to T4. \\
+  T6  & $64 \times 64 \times 32$ & 75\% & Uniform &
+    Tests effect of quadrupling dense width; 4 tile columns. \\
+  T7  & $32 \times 32 \times 32$ & 50\% & Uniform &
+    Low sparsity (dense); more nonzeros per row than T8/T9. \\
+  T8  & $32 \times 32 \times 32$ & 75\% & Uniform &
+    Mid-sparsity reference; matches T10/T11 except pattern. \\
+  T9  & $32 \times 32 \times 32$ & 90\% & Uniform &
+    Very sparse; exposes overhead-to-arithmetic ratio. \\
+  T10 & $32 \times 32 \times 32$ & 75\% & Row-skewed NNZ &
+    Same NNZ as T8; row imbalance sensitivity. \\
+  T11 & $32 \times 32 \times 32$ & 75\% & Clustered NNZ &
+    Same NNZ as T8; block locality sensitivity. \\
+  T12 & $64 \times 64 \times 32$ & 90\% & Uniform &
+    Large sparse stress case; wide output and few nonzeros. \\
+  \bottomrule
+  \end{tabular}
+  \caption{Complete benchmark input set used across all recorded
+           evaluation stages.}
+  \label{tab:benchmark-inputs}
+\end{table}
+
+\section{Cycle-Count Definitions and Speedup}
+
+CPU cycle counts are measured around the timed software SpMM function
+only. The measurement brackets the outer row loop, all CSR index reads
+(\texttt{rowptr}, \texttt{colidx}), the inner dense-column MAC loop, and
+all BRAM reads and writes to $B$ and $C$; matrix generation,
+quantisation, and output-buffer clearing happen outside the bracket and
+are deliberately excluded. Accelerator cycle counts are measured around
+the complete \texttt{accel\_run\_spmm\_int8()} call and therefore include
+the \texttt{clear\_done} write, the ten register writes of
+\texttt{accel\_configure()} (roughly 20 cycles of overhead), the
+\texttt{start} pulse, the complete hardware execution time, and the
+polling loop that follows (about five cycles per iteration, typically no
+more than ten iterations by the time \texttt{done} is observed). This
+is an end-to-end offload latency from the CPU's perspective, which is
+the correct metric for characterising user-visible benefit, but it is
+explicitly not a measurement of pure datapath throughput.
+
+Speedup is defined as
+\[
+  \text{Speedup} = \frac{T_{\mathrm{CPU}}}{T_{\mathrm{ACCEL}}},
+\]
+with both times measured in CPU clock cycles on the same 50\,MHz clock.
+For the RISC-V comparisons $T_{\mathrm{CPU}}$ is the timed PicoRV32
+software result (full INT32 for the baseline and DSP stages, INT8 for the
+INT8 stage); for the Cortex-M0 comparison $T_{\mathrm{CPU}}$ is the
+number of Cortex-M0 cycles computed from an equivalent instruction-count
+model for the same benchmark case.
+
+\section{Fairness, Limitations, and Threats to Validity}
+
+The comparison is fair in several important respects. The CPU and
+accelerator operate on the same benchmark inputs generated from the same
+fixed seeds, they use the same shared on-chip RAM system at the same
+50\,MHz clock, the software reference uses the M-extension \texttt{MUL}
+instruction for its inner multiplies so that it is not artificially
+slowed by software multiplication emulation, and the accelerator is
+always validated against the software reference before its timing is
+recorded. The Cortex-M0 comparison uses the same benchmark definitions
+and the same accelerator cycle counts, with the CPU-side figures derived
+from known Cortex-M0 instruction counts and the processor's published CPI
+model (predominantly single-cycle instructions with 1--3 cycle load
+latency). At the same time, the comparison differs in one important way:
+the PicoRV32 software baseline runs on the very same in-order core that
+controls the accelerator, with no cache, no speculation, and no SIMD. A
+more aggressively optimised CPU implementation (one with
+software-pipelined inner loops, block-reuse of $B$-rows, or explicit
+prefetching) would narrow the gap. The goal of the baseline is
+credibility and simplicity, not maximum CPU throughput.
+
+Several limitations apply to all results presented in
+Chapter~\ref{ch:results}. Each accelerator cycle count is a single
+recorded value rather than a statistical distribution over multiple runs;
+cycle counts for deterministic hardware are repeatable, but a
+min/median/max summary would add an extra layer of confidence. The test
+matrices are generated by a PRNG from fixed seeds rather than drawn from
+real GNN or recommender-system datasets, so while they cover realistic
+sparsity levels and pattern structures, performance on real workloads
+may differ. All data lives in the 64\,KB on-chip BRAM; real SpMM
+workloads typically span gigabytes and therefore incur DRAM latency,
+and the results here reflect the best-case scenario of tightly coupled
+on-chip memory. The accelerator cycle counts, as noted above, include
+MMIO configuration and polling overhead, and for the smallest case (T1)
+this overhead is a non-trivial fraction of the total. Finally, the
+Quartus post-fit resource and timing reports were still being finalised
+at the time of writing; the design has been verified to close timing at
+50\,MHz, but the exact ALM, BRAM, and DSP counts across all three build
+variants are pending.
+
+These limitations define the scope of the claims that can be
+responsibly made. The performance story (that INT8 packing delivers a
+$2.18\times$ improvement over DSP MAC, which delivers a $1.32\times$
+improvement over the baseline, and that memory bandwidth dominates the
+cycle budget) is not undermined by any of them. But claims about
+absolute performance at scale, DRAM bandwidth, or energy efficiency
+would require a different experimental infrastructure than the one
+developed here.

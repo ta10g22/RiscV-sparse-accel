@@ -1,0 +1,305 @@
+%% ----------------------------------------------------------------
+%% ECS.bib -- Bibliography for RISC-V SpMM Accelerator Project
+%% ----------------------------------------------------------------
+
+%% --- Platform and ISA ---
+
+@misc{riscv_isa,
+  author       = {{RISC-V International}},
+  title        = {{The RISC-V Instruction Set Manual, Volume I: Unprivileged ISA}},
+  year         = {2024},
+  howpublished = {\url{https://riscv.github.io/riscv-isa-manual/snapshot/unprivileged/}},
+  note         = {Accessed: 2026-03-03}
+}
+
+@misc{picorv32,
+  author       = {Wolf, Claire and contributors},
+  title        = {{PicoRV32: A Size-Optimized RISC-V CPU}},
+  year         = {2026},
+  howpublished = {\url{https://github.com/YosysHQ/picorv32}},
+  note         = {GitHub repository, Accessed: 2026-03-03}
+}
+
+@misc{de1soc_manual,
+  author       = {{Terasic Technologies}},
+  title        = {{DE1-SoC User Manual}},
+  year         = {2017},
+  howpublished = {\url{https://courses.cs.washington.edu/courses/cse371/references/DE1-SoC_User_Manual.pdf}},
+  note         = {Accessed: 2026-03-03}
+}
+
+@misc{cyclonev_handbook,
+  author       = {{Intel Corporation}},
+  title        = {{Cyclone V Device Handbook}},
+  year         = {2024},
+  howpublished = {\url{https://www.intel.com/content/www/us/en/docs/programmable/683375/current/cyclone-v-device-overview.html}},
+  note         = {Accessed: 2026-03-03}
+}
+
+@misc{intel_dsp_blocks,
+  author       = {{Intel Corporation}},
+  title        = {{Cyclone V Device: DSP Blocks User Guide}},
+  year         = {2022},
+  howpublished = {\url{https://www.intel.com/content/www/us/en/docs/programmable/683364/current/}},
+  note         = {Accessed: 2026-03-03}
+}
+
+@misc{intel_m10k,
+  author       = {{Intel Corporation}},
+  title        = {{Cyclone V Device: Embedded Memory User Guide}},
+  year         = {2022},
+  howpublished = {\url{https://www.intel.com/content/www/us/en/docs/programmable/683179/current/}},
+  note         = {Accessed: 2026-03-03}
+}
+
+%% --- Sparse Matrix Formats and Algorithms ---
+
+@article{gustavson1978,
+  author  = {Gustavson, Fred G.},
+  title   = {Two Fast Algorithms for Sparse Matrices: Multiplication and Permuted Transposition},
+  journal = {ACM Transactions on Mathematical Software},
+  year    = {1978},
+  volume  = {4},
+  number  = {3},
+  pages   = {250--269},
+  doi     = {10.1145/355791.355796}
+}
+
+@inproceedings{bell_garland2009,
+  author    = {Bell, Nathan and Garland, Michael},
+  title     = {Implementing Sparse Matrix-Vector Multiplication on Throughput-Oriented Processors},
+  booktitle = {Proceedings of the Conference on High Performance Computing Networking,
+               Storage and Analysis (SC'09)},
+  year      = {2009},
+  pages     = {1--11},
+  publisher = {ACM},
+  doi       = {10.1145/1654059.1654078}
+}
+
+@inproceedings{buluc2009,
+  author    = {Bulu{\c{c}}, Aydin and Fineman, Jeremy T. and Frigo, Matteo
+               and Gilbert, John R. and Leiserson, Charles E.},
+  title     = {Parallel Sparse Matrix-Vector and Matrix-Transpose-Vector
+               Multiplication Using Compressed Sparse Blocks},
+  booktitle = {Proceedings of the 21st Annual Symposium on Parallelism in
+               Algorithms and Architectures (SPAA)},
+  year      = {2009},
+  pages     = {233--244},
+  publisher = {ACM},
+  doi       = {10.1145/1583991.1584053}
+}
+
+%% --- SpMM and Sparse Accelerators ---
+
+@inproceedings{outerspace2018,
+  author    = {Pal, Subhankar and Beaumont, Jonathan and Park, Dong-Hyeon
+               and Amarnath, Aporva and Feng, Siying and Chakrabarti, Chaitali
+               and Kim, Hun-Seok and Blaauw, David and Mudge, Trevor
+               and Dreslinski, Ronald},
+  title     = {{OuterSPACE}: An Outer Product Based Sparse Matrix Multiplication Accelerator},
+  booktitle = {Proceedings of the IEEE International Symposium on High Performance
+               Computer Architecture (HPCA)},
+  year      = {2018},
+  pages     = {724--736},
+  publisher = {IEEE},
+  doi       = {10.1109/HPCA.2018.00067}
+}
+
+@inproceedings{sparch2020,
+  author    = {Zhang, Zhekai and Wang, Hanrui and Han, Song and Dally, William J.},
+  title     = {{SpArch}: Efficient Architecture for Sparse Matrix Multiplication},
+  booktitle = {Proceedings of the IEEE International Symposium on High Performance
+               Computer Architecture (HPCA)},
+  year      = {2020},
+  pages     = {261--274},
+  publisher = {IEEE},
+  doi       = {10.1109/HPCA47549.2020.00030}
+}
+
+@inproceedings{extensor2019,
+  author    = {Hegde, Kartik and Tsai, Po-An and Huang, Sheng-Chun
+               and Chandra, Vikas and Parashar, Angshuman and Fletcher, Christopher W.},
+  title     = {{ExTensor}: An Accelerator for Sparse Tensor Algebra},
+  booktitle = {Proceedings of the 52nd Annual IEEE/ACM International Symposium
+               on Microarchitecture (MICRO)},
+  year      = {2019},
+  pages     = {319--333},
+  publisher = {ACM},
+  doi       = {10.1145/3352460.3358275}
+}
+
+@inproceedings{sigma2020,
+  author    = {Qin, Eric and Samajdar, Ananda and Kwon, Hyoukjun and Nadella, Vineet
+               and Srinivasan, Sudarshan and Das, Dipankar and Kaul, Bharat and Krishna, Tushar},
+  title     = {{SIGMA}: A Sparse and Irregular {GEMM} Accelerator with Flexible
+               Interconnects for {DNN} Training},
+  booktitle = {Proceedings of the IEEE International Symposium on High Performance
+               Computer Architecture (HPCA)},
+  year      = {2020},
+  pages     = {58--70},
+  publisher = {IEEE},
+  doi       = {10.1109/HPCA47549.2020.00015}
+}
+
+@inproceedings{matraptor2020,
+  author    = {Srivastava, Nitish and Jin, Hanchen and Smith, Jocelyn and Rong, Hongbo
+               and Albonesi, David and Zhang, Zhiru},
+  title     = {{MatRaptor}: A Sparse-Sparse Matrix Multiplication Accelerator
+               Based on Row-Wise Products},
+  booktitle = {Proceedings of the 53rd Annual IEEE/ACM International Symposium
+               on Microarchitecture (MICRO)},
+  year      = {2020},
+  pages     = {766--780},
+  publisher = {IEEE},
+  doi       = {10.1109/MICRO50266.2020.00067}
+}
+
+%% --- Graph Neural Networks and SpMM Motivation ---
+
+@inproceedings{graphsage2017,
+  author    = {Hamilton, William L. and Ying, Rex and Leskovec, Jure},
+  title     = {Inductive Representation Learning on Large Graphs},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2017},
+  volume    = {30},
+  publisher = {Curran Associates}
+}
+
+@inproceedings{gat2018,
+  author    = {Veli{\v{c}}kovi{\'{c}}, Petar and Cucurull, Guillem and Casanova, Arantxa
+               and Romero, Adriana and Li{\`o}, Pietro and Bengio, Yoshua},
+  title     = {Graph Attention Networks},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2018}
+}
+
+@inproceedings{kepner2016,
+  author    = {Kepner, Jeremy and Aaltonen, Peter and Bader, David and Bulu{\c{c}}, Aydin
+               and Franchetti, Franz and Gilbert, John and Hutchison, Dylan
+               and Kumar, Manoj and Lugowski, Andrew and Moreira, Jose
+               and Puri, Ramesh and Samsi, Siddharth and Sherrington, Steven
+               and Thottethodi, Mithuna and Udayan, Tze Meng},
+  title     = {Mathematical Foundations of the {GraphBLAS}},
+  booktitle = {Proceedings of the IEEE High Performance Extreme Computing Conference (HPEC)},
+  year      = {2016},
+  pages     = {1--9},
+  publisher = {IEEE},
+  doi       = {10.1109/HPEC.2016.7761646}
+}
+
+%% --- Quantization and Model Compression ---
+
+@inproceedings{jacob2018,
+  author    = {Jacob, Benoit and Kligys, Skirmantas and Chen, Bo and Zhu, Menglong
+               and Tang, Matthew and Howard, Andrew and Adam, Hartwig and Kalenichenko, Dmitry},
+  title     = {Quantization and Training of Neural Networks for Efficient
+               Integer-Arithmetic-Only Inference},
+  booktitle = {Proceedings of the IEEE Conference on Computer Vision and
+               Pattern Recognition (CVPR)},
+  year      = {2018},
+  pages     = {2704--2713},
+  publisher = {IEEE},
+  doi       = {10.1109/CVPR.2018.00286}
+}
+
+@inproceedings{han2016eie,
+  author    = {Han, Song and Liu, Xingyu and Mao, Huizi and Pu, Jing
+               and Pedram, Ardavan and Horowitz, Mark A. and Dally, William J.},
+  title     = {{EIE}: Efficient Inference Engine on Compressed Deep Neural Network},
+  booktitle = {Proceedings of the 43rd International Symposium on
+               Computer Architecture (ISCA)},
+  year      = {2016},
+  pages     = {243--254},
+  publisher = {IEEE},
+  doi       = {10.1109/ISCA.2016.30}
+}
+
+@article{nagel2021,
+  author  = {Nagel, Markus and Fournarakis, Marios and Amjad, Rana Ali
+             and Bondarenko, Yelysei and van Baalen, Mart and Blankevoort, Tijmen},
+  title   = {A White Paper on Neural Network Quantization},
+  journal = {arXiv preprint arXiv:2106.08295},
+  year    = {2021}
+}
+
+%% --- DNN Hardware Acceleration Surveys ---
+
+@article{sze2017,
+  author  = {Sze, Vivienne and Chen, Yu-Hsin and Yang, Tien-Ju and Emer, Joel S.},
+  title   = {Efficient Processing of Deep Neural Networks: A Tutorial and Survey},
+  journal = {Proceedings of the IEEE},
+  year    = {2017},
+  volume  = {105},
+  number  = {12},
+  pages   = {2295--2329},
+  doi     = {10.1109/JPROC.2017.2761740}
+}
+
+%% --- FPGA Acceleration ---
+
+@inproceedings{nurvitadhi2017,
+  author    = {Nurvitadhi, Eriko and Venkatesh, Ganesh and Sim, Jaewoong
+               and Marr, Debbie and Huang, Randy and Ong Gee Hock, Jason
+               and Liew, Yeong Tat and Srivatsan, Krishnan and Moss, Duncan
+               and Subhaschandra, Suchit and Ruhl, Guy},
+  title     = {Can {FPGAs} Beat {GPUs} in Accelerating Next-Generation
+               Deep Neural Networks?},
+  booktitle = {Proceedings of the ACM/SIGDA International Symposium on
+               Field-Programmable Gate Arrays (FPGA)},
+  year      = {2017},
+  pages     = {5--14},
+  publisher = {ACM},
+  doi       = {10.1145/3020078.3021740}
+}
+
+@inproceedings{zhang2015fpga,
+  author    = {Zhang, Chen and Li, Peng and Sun, Guangyu and Guan, Yijin
+               and Xiao, Bingjun and Cong, Jason},
+  title     = {Optimizing {FPGA}-based Accelerator Design for Deep
+               Convolutional Neural Networks},
+  booktitle = {Proceedings of the ACM/SIGDA International Symposium on
+               Field-Programmable Gate Arrays (FPGA)},
+  year      = {2015},
+  pages     = {161--170},
+  publisher = {ACM},
+  doi       = {10.1145/2684746.2689060}
+}
+
+@inproceedings{zhou2017fpga_spmv,
+  author    = {Zhou, Shijin and Agrawal, Peir and Li, Xiping and Sun, Fang
+               and Chen, Deming},
+  title     = {Accelerating Sparse Matrix Vector Multiplication in Iterative
+               Methods Using {FPGA}},
+  booktitle = {Proceedings of the International Conference on Parallel
+               Processing (ICPP)},
+  year      = {2017},
+  pages     = {631--640},
+  publisher = {IEEE},
+  doi       = {10.1109/ICPP.2017.72}
+}
+
+%% --- Roofline Model ---
+
+@article{williams2009roofline,
+  author  = {Williams, Samuel and Waterman, Andrew and Patterson, David},
+  title   = {Roofline: An Insightful Visual Performance Model for Multicore
+             Architectures},
+  journal = {Communications of the ACM},
+  year    = {2009},
+  volume  = {52},
+  number  = {4},
+  pages   = {65--76},
+  doi     = {10.1145/1498765.1498785}
+}
+
+%% --- Recommender Systems ---
+
+@inproceedings{covington2016youtube,
+  author    = {Covington, Paul and Adams, Jay and Sargin, Emre},
+  title     = {Deep Neural Networks for {YouTube} Recommendations},
+  booktitle = {Proceedings of the 10th ACM Conference on Recommender Systems (RecSys)},
+  year      = {2016},
+  pages     = {191--198},
+  publisher = {ACM},
+  doi       = {10.1145/2959100.2959190}
+}

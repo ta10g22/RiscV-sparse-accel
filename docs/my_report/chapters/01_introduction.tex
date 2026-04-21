@@ -1,0 +1,85 @@
+\chapter{Introduction}
+\label{ch:introduction}
+
+\section{Motivation}
+
+Sparse matrix--dense matrix multiplication (SpMM) is one of the fundamental
+computational kernels in modern machine learning and graph-based computing.
+In graph neural networks (GNNs) it embodies the neighbourhood aggregation
+step, in which a sparse adjacency matrix is multiplied against a dense
+feature matrix~\citep{graphsage2017, gat2018}. In large-scale recommender
+systems, collaborative filtering relies on sparse user--item interaction
+matrices whose dimensions can reach hundreds of millions of
+rows~\citep{covington2016youtube}. In scientific simulation it is the
+inner loop of iterative solvers for finite-element and finite-difference
+discretisations. The same pattern appears in transformer attention with
+sparse masks and in the weight-matrix multiply step of pruned and
+compressed neural networks~\citep{han2016eie}. Across all of these
+workloads the common denominator is that the useful arithmetic is only
+a small fraction of the work that a general-purpose processor actually
+performs, with most cycles spent chasing indirect indices, handling row
+boundaries, and issuing scattered memory accesses.
+
+With the rapid rise in demand for AI, there has been a matching rise in
+demand for better model algorithms, more data, and above all more compute.
+On the compute side, most AI workloads are now executed on application
+specific integrated circuits (ASICs), since these have been shown to
+maximise throughput, energy efficiency, and cost effectiveness for the
+particular matrix operations that AI models need to run. Some of the most
+well known commercial examples are the Tensor Processing Unit (TPU) from
+Google and the Neural Processing Unit (NPU) from Apple. The design of any
+such ASIC, however, almost always begins with prototyping on a Field
+Programmable Gate Array (FPGA), because FPGAs can execute many operations
+in parallel and are easily reconfigurable, which keeps the cost and
+turnaround time of architectural exploration both low and fast. An
+FPGA-hosted accelerator for SpMM is therefore a natural first step towards
+a fully custom silicon implementation, and is the platform targeted by
+this project.
+
+\section{Project Aim}
+
+The aim of this project is to design, implement, and evaluate a RISC-V
+compatible hardware accelerator for compressed sparse row (CSR) SpMM on
+the Terasic DE1-SoC FPGA board. The accelerator must integrate cleanly
+into a small system-on-chip (SoC), share on-chip block RAM with the CPU,
+and deliver a measurable, reproducible speedup over a comparable software
+implementation while remaining understandable at the register-transfer
+level (RTL) and transparent in its benchmarking methodology. A secondary
+aim is to isolate the individual contribution of each optimisation step,
+so that the dominant performance bottleneck can be identified through
+direct measurement rather than assumption. To achieve this, the design
+is developed in three stages (a baseline accelerator, a parallel
+DSP-oriented multiply-accumulate enhancement, and a symmetric INT8
+packing stage), forming a controlled experimental path in which only
+one design dimension is changed at a time.
+
+Beyond the core aim, the project defined three stretch goals at the
+outset. The first was to introduce a custom RISC-V instruction to trigger
+the accelerator directly from the CPU pipeline, rather than through a
+memory-mapped register write, which would reduce launch overhead and
+demonstrate that the PicoRV32 softcore can be extended at the instruction
+set level. The second was to implement runtime INT8 quantisation so that
+operand fetch bandwidth could be reduced by packing four quantised values
+into a single 32-bit RAM word. The third was to extend the accelerator
+with optional activation functions and a max-pooling stage, so that it
+could serve as a building block for a small inference pipeline rather
+than as a standalone kernel. Of the three, the INT8 quantisation goal
+was achieved and is reported in full in this work; the remaining two
+are discussed as future work in Chapter~\ref{ch:conclusion}.
+
+\section{Report Structure}
+
+The remainder of this report is structured as follows.
+Chapter~\ref{ch:motivation} reviews the background needed to justify the
+design choices, covering SpMM workloads, sparse data formats, prior
+accelerator work, the rationale for FPGAs, and INT8 quantisation theory.
+Chapter~\ref{ch:platform} defines the implemented SoC platform and its
+memory-mapped I/O interface. Chapter~\ref{ch:design} presents the
+accelerator architecture and each optimisation step in detail.
+Chapter~\ref{ch:firmware} describes the bare-metal firmware and data
+preparation flow. Chapter~\ref{ch:methodology} defines the verification
+and benchmark methodology. Chapter~\ref{ch:results} presents and
+interprets all recorded benchmark results. Chapter~\ref{ch:reflection}
+discusses lessons learned and project management, and
+Chapter~\ref{ch:conclusion} closes the report with a summary and proposed
+future work.

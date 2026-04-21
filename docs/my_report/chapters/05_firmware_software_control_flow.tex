@@ -1,0 +1,198 @@
+\chapter{Firmware and Software Control Flow}
+\label{ch:firmware}
+
+\section{Firmware Architecture and Memory Layout}
+
+The bare-metal firmware is the software side of the hardware--software
+co-design and is responsible for every aspect of the benchmark loop:
+matrix generation, data preparation, accelerator configuration, timing
+measurement, correctness checking, and result reporting. No operating
+system is present; the firmware runs directly on PicoRV32 from address
+\texttt{0x0000\_0000}. Control begins in \texttt{start.S}, a short
+RISC-V assembly bootstrap that sets the stack pointer to the top of the
+64\,KB RAM, clears the BSS section, and enters \texttt{main()}.
+\texttt{main.c} itself defines the 12 test cases, iterates over them, and
+for each case drives matrix generation, the software reference, the
+accelerator launch, correctness comparison, and UART reporting. The
+accelerator driver \texttt{spmm\_accel.c/.h} wraps the MMIO register
+interface behind configuration, start, and polling functions, and a
+handful of \texttt{memset}/\texttt{memcpy}/\texttt{memmove} stubs in
+\texttt{libc\_stubs.c} cover the minimum set of C library calls required
+for bare-metal operation. The linker script maps all sections
+(\texttt{.text}, \texttt{.rodata}, \texttt{.data}, \texttt{.bss}) into the
+same 64\,KB RAM, with the stack growing downward from the top.
+
+Matrix buffers are allocated statically in the upper portion of the
+address space, so that the CSR arrays, dense matrix $B$, and the output
+matrices (\texttt{c\_accel} and \texttt{c\_cpu}) occupy contiguous regions
+below the stack. The largest benchmark (T6: $64 \times 64 \times 32$,
+75\% sparsity, NNZ~$\approx 1024$) consumes roughly
+\[
+  \underbrace{65 \times 4}_{\texttt{rowptr}} +
+  \underbrace{1024 \times 4}_{\texttt{colidx}} +
+  \underbrace{1024 \times 4}_{\texttt{values}} +
+  \underbrace{64 \times 32 \times 4}_{B} +
+  \underbrace{64 \times 32 \times 4}_{C} \approx 29\,\text{KB}
+\]
+of matrix data, leaving comfortable headroom in the 64\,KB budget for
+firmware code and stack.
+
+\section{Runtime Data Preparation}
+\label{sec:data-prep}
+
+Dense matrix $B$ is generated from a linear congruential PRNG seeded by
+the benchmark case's \texttt{seed} field, with each entry sampled as a
+signed integer in the range $[-127, 127]$ (directly usable as INT32 in
+the full-precision path, and as the pre-quantisation domain for the INT8
+path). Fixing the seed makes $B$ deterministic across runs and across
+firmware revisions, which is what makes cycle-count regression comparison
+across the three optimisation stages meaningful in the first place.
+
+Sparse matrix $A$ is generated in three phases. Nonzero positions are
+placed first, according to the pattern selected by the benchmark case.
+For a uniform pattern, each row $i$ receives a target count
+$n_i = \lfloor K(1 - s/100) \rfloor$ of nonzeros at column indices
+sampled without replacement from the PRNG; for a row-skewed pattern,
+roughly 30\% of the rows receive a disproportionate share of the total
+NNZ budget, simulating the hub-node behaviour characteristic of social
+graphs; and for a clustered pattern, nonzeros are biased toward
+rectangular blocks within the matrix, mimicking the blocked sparsity seen
+in some finite-element problems. Each placed nonzero then receives a
+random signed value in $[-127, 127]$. Finally, the CSR representation is
+constructed: column indices within each row are sorted in ascending order
+(required for determinism and for correct comparison against the CPU
+reference), \texttt{rowptr} is produced by a prefix sum of per-row
+nonzero counts, and the sorted indices and values are written to
+\texttt{colidx} and \texttt{values}. Sorting column indices also makes
+the CSR representation canonical across runs, which simplifies debugging
+whenever an accelerator output needs to be compared by hand against the
+expected reference.
+
+\section{Software Baseline}
+
+The software reference is deliberately written in the simplest possible
+form. The full-precision inner structure is:
+\begin{verbatim}
+for (row = 0; row < M; row++) {
+    for (p = rowptr[row]; p < rowptr[row+1]; p++) {
+        col = colidx[p];
+        a   = values[p];
+        for (n = 0; n < N; n++)
+            C[row*N + n] += a * B[col*N + n];
+    }
+}
+\end{verbatim}
+\noindent\textbf{Listing~\ref{lst:spmm-cpu}}: PicoRV32 software SpMM
+(full precision).
+\label{lst:spmm-cpu}
+
+Only the M-extension \texttt{MUL} instruction is used for the inner
+multiply. There is no SIMD, no loop unrolling, and no software
+prefetching. This simplicity is intentional: the point of the baseline is
+not to measure the fastest CPU implementation possible but to give a
+credible, readable software reference against which the accelerator's
+structural advantage can be isolated. The INT8 CPU reference
+(\texttt{spmm\_cpu\_q8}) follows the same structure but operates on
+signed 8-bit operands with INT32 accumulation, and it is the version used
+for correctness comparison against the INT8 accelerator output.
+
+\section{INT8 Quantisation and Packing}
+\label{sec:quant-flow}
+
+Before an INT8 accelerator run, firmware applies symmetric runtime
+quantisation separately to the CSR values array and to matrix $B$.
+For a vector $\mathbf{v}$ of length $L$, the procedure computes
+$v_{\max} = \max_i |v_i|$, sets scale $s = v_{\max}/127$, and quantises
+each element as $q_i = \mathrm{clip}(\mathrm{round}(v_i/s), -127, 127)$.
+The edge case $v_{\max} = 0$ is handled by setting all quantised values
+to zero and $s = 1$. This matches Equation~\ref{eq:quant} from
+Section~2.6. The scale factor is computed and then discarded at
+quantisation time: since the correctness check compares accelerator
+output against the \emph{quantised} CPU reference (which accumulates the
+same signed INT8 values), there is no need to store $s$, and keeping the
+path scale-free simplifies both the accumulator logic and the verification.
+
+After quantisation, four consecutive INT8 values are packed into a single
+32-bit word in little-endian byte order:
+\begin{verbatim}
+for (i = 0; i < len; i += 4) {
+    word = ((uint32_t)(uint8_t)q[i+0])        |
+           ((uint32_t)(uint8_t)q[i+1] << 8)   |
+           ((uint32_t)(uint8_t)q[i+2] << 16)  |
+           ((uint32_t)(uint8_t)q[i+3] << 24);
+    dst[i/4] = word;
+}
+\end{verbatim}
+
+Matrix $B$ is packed row by row, so a single 32-bit RAM read on the
+hardware side delivers four aligned INT8 values and directly populates
+four lanes of the $B$-segment buffer after sign extension, exactly as
+described in Section~\ref{sec:fsm}.
+
+\section{Accelerator Launch and Timing}
+
+The accelerator driver exposes \texttt{accel\_configure()} for writing
+dimension and base-address registers, \texttt{accel\_start\_mode()} for
+issuing the control write with the \texttt{start} pulse and the
+\texttt{relu\_en}/\texttt{int8\_mode} bits, and \texttt{accel\_wait\_done()}
+for polling \texttt{STATUS.done}. \texttt{accel\_run\_spmm\_int8()} wraps
+these into the canonical launch sequence used on every benchmark case.
+Firmware first writes \texttt{clear\_done} to reset any prior completion
+state, calls \texttt{accel\_configure()} to set dimensions and base
+addresses, captures the pre-launch cycle count $t_0$, issues the
+\texttt{start}-mode write, polls \texttt{STATUS.done} in a tight loop,
+captures the post-completion cycle count $t_1$, writes \texttt{clear\_done}
+once more to reset for the next run, and reports $t_1 - t_0$ as the
+accelerator cycle count. The reported figure therefore includes register
+write overhead, the full hardware execution time, and the polling loop
+delay, and is explicitly an end-to-end offload latency rather than a pure
+datapath throughput measurement.
+
+Timing itself relies on the PicoRV32 \texttt{rdcycle} CSR, which returns
+the lower 32 bits of a monotonically increasing hardware cycle counter
+clocked at 50\,MHz. The read is wrapped in a short inline assembly stub:
+\begin{verbatim}
+static inline uint32_t read_cycles(void) {
+    uint32_t cyc;
+    asm volatile("rdcycle %0" : "=r"(cyc));
+    return cyc;
+}
+\end{verbatim}
+
+The 32-bit counter wraps at $2^{32}$ cycles, which at 50\,MHz is
+approximately 85 seconds. The largest benchmark in the suite completes
+in fewer than two million cycles, so wrap-around is not a concern and no
+32-to-64-bit extension is required in firmware.
+
+\section{Reporting and Correctness Verification}
+
+Results are output as CSV-formatted lines over the on-chip UART at
+115200\,baud (50\,MHz / 434 cycles per bit), with each line containing
+the test ID, the dimensions $M$, $K$, $N$, the sparsity percentage and
+pattern, the NNZ count, the CPU and accelerator cycle counts, the derived
+speedup, and a PASS/FAIL verdict. A simplified summary is also driven
+onto the DE1-SoC's six seven-segment displays (the upper pair shows
+CPU cycles scaled by 64, the middle pair shows raw accelerator cycles,
+and the lower pair shows integer speedup), so that a running benchmark
+can be read at a glance without a host terminal. The LED output mirrors
+the busy/done signals, so visually the board is lit during accelerator
+execution and cleared the moment computation completes.
+
+Correctness verification is embedded directly in the benchmark loop:
+after each accelerator run, firmware performs an element-by-element
+comparison between \texttt{c\_accel} and the INT8 CPU reference
+\texttt{c\_cpu}:
+\begin{verbatim}
+for (i = 0; i < M*N; i++) {
+    if (c_accel[i] != c_cpu[i]) {
+        pass = 0; break;
+    }
+}
+\end{verbatim}
+The full-precision CPU result is also computed in parallel but untimed,
+and serves as a sanity reference against which quantisation error can be
+inspected if needed. Because both the CPU and the accelerator apply the
+same symmetric INT8 quantisation to the same input data and accumulate
+identical INT32 partial sums, their outputs must match exactly, and any
+discrepancy flags a hardware bug rather than a numerical artefact. All
+12 cases reported PASS across all three accelerator stages on hardware.

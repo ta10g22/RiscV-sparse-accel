@@ -3,7 +3,19 @@
 # macOS clutter
 .DS_Store
 
-# Keep local docs/report out of Git
-docs/
 Part_III_broject_brief.pdf
+
+# LaTeX build artefacts (not useful to version)
+docs/**/*.aux
+docs/**/*.log
+docs/**/*.toc
+docs/**/*.out
+docs/**/*.synctex.gz
+docs/**/*.fls
+docs/**/*.fdb_latexmk
+docs/**/*.bbl
+docs/**/*.blg
+
+#claude files
+.claude
 

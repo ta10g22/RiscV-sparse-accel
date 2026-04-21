@@ -1,0 +1,95 @@
+\chapter{Reflection}
+\label{ch:reflection}
+
+\section{What Worked Well}
+
+Structuring development as a sequence of discrete, measurable optimisation
+stages (baseline, DSP MAC, and INT8 packing) was the single most valuable
+decision in the project. A working baseline was established and verified on
+hardware before any optimisation was attempted, and each subsequent stage
+changed exactly one aspect of the design: arithmetic parallelism first, then
+memory traffic. This made it possible to attribute each measured improvement
+to a specific architectural change, to detect regressions immediately, and to
+build the evidence-based narrative used throughout Chapter~\ref{ch:results}.
+
+The deterministic benchmark harness was equally important. Generating all
+test inputs from fixed seeds at runtime, and computing golden outputs on the
+same PicoRV32 host, removed the need for off-chip reference data and ensured
+that the same matrices were used across all three hardware stages. Any
+functional discrepancy introduced by a hardware or software change would have
+been caught by the element-by-element comparison on the next rebuild.
+
+The roofline analysis in Chapter~\ref{ch:motivation} correctly predicted before
+implementation that memory traffic, not arithmetic, would be the dominant
+bottleneck. The measured $1.32\times$ gain from DSP-based MAC compared to the
+$2.18\times$ gain from INT8 packing confirmed this diagnosis quantitatively. A
+design effort that had focused purely on widening the MAC array would have
+yielded diminishing returns; addressing the memory bottleneck directly produced
+the largest single performance step.
+
+\section{What Went Wrong and What Was Learned}
+
+The most time-consuming debugging episode involved a stale
+\texttt{firmware.mif} file. The FPGA synthesis flow uses this memory
+initialisation file to preload on-chip RAM with the compiled firmware image.
+When the file was not regenerated after a firmware change, the board continued
+to run the previous image while the expected code had in fact been rebuilt.
+Diagnosing this required noticing that on-board UART output did not match the
+current source, which was non-trivial when the visible output is only a few bytes. The
+lesson is that FPGA flows combining independently compiled software and
+hardware artefacts require explicit dependency management in the build system;
+a Makefile rule that re-triggers synthesis on \texttt{firmware.mif} changes
+would have prevented the issue entirely.
+
+A second lesson came from increasing routing pressure as parallel logic was
+added. Quartus reported higher congestion around the C-tile register array
+and the wide MAC buses, and one timing closure attempt failed before synthesis
+settings were adjusted. Parallelism in FPGA designs carries costs beyond
+logic area: routing, placement, and timing closure are interdependent, and a
+design that fits comfortably in ALMs can still fail to close timing if the
+wiring density in a local region exceeds the device's capacity. This tension
+does not appear in RTL simulation and cannot be resolved by functional
+correctness alone.
+
+\section{Current Limitations}
+
+Several limitations constrain the scope of the conclusions drawn in this
+report. Full Quartus post-fit timing and resource reports for all three
+variants were still being finalised at the time of writing, so the
+figures in Table~\ref{tab:quartus-final} are estimates and should not be
+treated as definitive until the final revision. The reported accelerator
+cycle counts are end-to-end and include the software orchestration
+overhead (register writes and the polling loop), which for the smallest
+benchmark cases is a non-trivial fraction of the total and cannot be
+cleanly separated from hardware execution time without adding an internal
+cycle-counter register to the accelerator. The 64\,KB on-chip RAM bounds
+the benchmark matrices to $M = K \leq 64$ and moderate $N$, whereas real
+GNN workloads operate at dimensions several orders of magnitude larger
+and require an off-chip memory system to be meaningful. Finally, no
+power measurement was performed: the DE1-SoC board does not expose a
+direct rail-level measurement interface, and external instrumentation
+was outside the scope of the project.
+
+\section{Project Management}
+
+The project ran across two semesters. Semester~1 covered literature review,
+platform selection, and the baseline RTL; Semester~2 covered the three
+optimisation stages, the firmware benchmark harness, hardware deployment, and
+report writing. The Gantt charts in Appendix~\ref{app:gantt} record the
+original plan.
+
+The schedule pressure in Semester~2 arose almost entirely during FPGA
+integration: combining PicoRV32, BRAM port configuration, UART, and
+accelerator MMIO in a single synthesisable design took longer than planned,
+in part because of the stale-artefact bug described above and in part because
+timing closure required more synthesis experimentation than expected. Keeping
+a fully working, deployable design at every stage, rather than accumulating
+incomplete features before integration, was the practice that kept the
+overall schedule recoverable.
+
+The overall lesson is that hardware project timelines are dominated by
+integration and debug, not by initial design. Treating build-flow discipline
+(artefact management, synthesis scripts, timing closure) as first-class
+engineering work from the start, rather than as polish at the end, would have
+eliminated most of the schedule pressure experienced in the second half of
+the project.

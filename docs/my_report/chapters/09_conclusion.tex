@@ -1,0 +1,82 @@
+\chapter{Conclusion and Future Work}
+\label{ch:conclusion}
+
+\section{Summary of Achievements}
+
+This project set out to design, implement, and evaluate a RISC-V-attached
+hardware accelerator for CSR sparse matrix--dense matrix multiplication on the
+Terasic DE1-SoC, and to demonstrate a measurable speedup over software while
+remaining reproducible at the register-transfer level. That aim was met. A
+complete PicoRV32 SoC with a working SpMM accelerator, 64\,KB shared
+dual-port BRAM, MMIO interface, and UART reporting was synthesised and
+deployed; three recorded optimisation stages (baseline, DSP-enhanced, and
+INT8 packed) were each verified for correctness on hardware; and a 12-case
+benchmark harness with deterministic matrix generation, cycle-accurate timing,
+and element-by-element correctness checking was developed to evaluate them.
+
+The final INT8-packed implementation achieves a peak speedup of
+$\mathbf{56.80\times}$ over the quantised PicoRV32 software reference and
+$\mathbf{11.92\times}$ over an ARM Cortex-M0 baseline running the same
+algorithm, with an average of $45.28\times$ and $9.79\times$ respectively
+across the 12-case suite. All 12 cases passed correctness checks at every
+stage.
+
+\section{Significance}
+
+The significance of this work lies not in the absolute numbers compared to
+large research accelerators, but in what the staged measurement reveals about
+the workload. The $1.32\times$ gain from DSP-based MAC versus the
+$2.18\times$ gain from INT8 packing experimentally confirms that the dominant
+bottleneck in CSR SpMM on a memory-bandwidth-constrained embedded FPGA is
+operand fetch traffic, not arithmetic execution. This is a useful result
+beyond the specific artefact: it indicates that similar embedded accelerators
+should prioritise format-level and precision-level optimisations over wider
+MAC arrays. The project also demonstrates that a fully integrated, firmware-
+driven hardware benchmark harness is a practical alternative to external
+simulation infrastructure for small-scale accelerator evaluation, and that a
+useful SpMM accelerator fits comfortably within the resource budget of a
+Cyclone~V device.
+
+\section{Future Work}
+
+The most impactful extensions to the current design would be:
+
+\begin{enumerate}
+  \item \textbf{Wider tile width.} INT8 packing reduces the per-nonzero fetch
+        cost enough that widening from $TN = 8$ to $TN = 16$ or $TN = 32$ is
+        now attractive. Doubling the tile width costs an additional two
+        32-bit reads per nonzero but delivers $2\times$ the MAC throughput
+        per nonzero, and should push the speedup ceiling further.
+
+  \item \textbf{Ping-pong $B$-segment prefetch.} Double-buffering the
+        $B$-segment allows the next segment to be fetched while the current
+        MAC operation completes, overlapping memory latency with arithmetic
+        and removing it from the critical path.
+
+  \item \textbf{External memory interface.} Extending the design to address
+        off-chip SDRAM or HPS DRAM through the DE1-SoC's HPS bridge would
+        permit realistically sized GNN and recommender-system matrices to
+        be benchmarked, at which point off-chip bandwidth becomes the
+        dominant term and different optimisations become relevant.
+
+  \item \textbf{Interrupt-driven completion.} Replacing the polling loop
+        with a RISC-V interrupt handler would free the CPU during
+        accelerator execution, enabling pipelined benchmark preparation or
+        post-processing of the previous result.
+
+  \item \textbf{Power and energy characterisation.} Instrumenting the
+        DE1-SoC rails or using Quartus Power Analyser with simulation-derived
+        toggle files would add energy efficiency to the evaluation, which is
+        the metric that matters most in the embedded and edge contexts for
+        which this class of accelerator is targeted.
+\end{enumerate}
+
+\section{Closing Remarks}
+
+This project has delivered a complete, measured, and reproducible RISC-V
+FPGA-attached SpMM accelerator that achieves a peak speedup of $56.80\times$
+on hardware through three progressively optimised designs. The work confirms
+that even without exotic hardware resources or advanced scheduling, careful
+alignment of the memory format, datapath structure, and quantisation strategy
+with the actual bottleneck of the workload produces large, predictable, and
+experimentally confirmed performance gains.
