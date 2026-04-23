@@ -94,9 +94,7 @@ operand width. Figure~\ref{fig:datapath} shows the block diagram.
                {addr/read} (bram.west);
     \draw[arr] (bram.south) -- node[right, font=\footnotesize]{B words}
                (0, 1.75);
-    \draw[arr] (ctrl.east) -- node[above, font=\footnotesize]
-               {\texttt{mac\_a}, \texttt{mac\_row}, \texttt{mac\_en}}
-               (m0.west);
+    \draw[arr] (ctrl.east) -- (m0.west);
 
     \foreach \i in {0,1,2,3,4,5,6,7} {
       \draw[arr, shorten >=1pt] (bs\i.south) -- (m\i.north);
@@ -196,7 +194,7 @@ this corresponds to.
 
 Once every row has been visited for the current tile column, the datapath
 walks \texttt{C\_Tile} row by row and writes each entry back to shared RAM.
-If \texttt{CTRL.relu\_en} is set, an element-wise $\max(0, \cdot)$ is applied
+If \texttt{CTRL.relu\_en} is set, an element-wise $\max(0, x)$ is applied
 on the writeback path, so the accelerator can serve directly as the
 fully-connected layer of a neural-network inference pipeline.
 
