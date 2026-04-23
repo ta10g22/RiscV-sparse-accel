@@ -1,97 +1,230 @@
 \chapter{Accelerator Design}
 \label{ch:design}
 
-\section{Design Philosophy and Architecture}
+This chapter describes how the SpMM accelerator is built and why. It starts
+with a short overview of the architecture, works through the baseline
+datapath and the control FSM, and then covers the two design choices that do
+most of the work: the tile width and the row-wise CSR traversal. The final
+sections describe the DSP and INT8 optimisations and the physical-design
+constraints they exposed.
 
-The accelerator was shaped by the execution structure of CSR SpMM rather
-than adapted from a generic dense-matrix template. CSR SpMM has three
-distinct computational phases (row-bound loading, nonzero streaming, and
-dense tile accumulation), and each phase has a different memory and
-control-flow character. Any hardware design that treats them as a single
-monolithic pipeline inevitably over-engineers one phase and underserves
-another, so the architecture instead separates concerns explicitly: a
-control finite state machine (\texttt{accel\_ctrl}) walks the CSR structure
-and sequences RAM accesses, while a datapath (\texttt{accel\_datapath})
-performs the parallel multiply--accumulate and manages the local tile
-buffers. This split follows standard digital design
-practice~\citep{sze2017} and, more importantly, allows each half of the
-accelerator to be verified independently in simulation before integration.
+\section{Overview}
 
-The top-level module (\texttt{accel\_top}) wraps these two blocks together
-with an MMIO front-end that decodes the PicoRV32 memory bus and exposes the
-configuration interface of Table~\ref{tab:mmio-regs}. The accelerator
-reaches shared memory through Port~B of the dual-port BRAM, a 32-bit
-word-granular port with one cycle of registered read latency. All RAM
-accesses are therefore scheduled as paired issue/consume phases separated
-by exactly one clock cycle, which gives the controller a deterministic
-latency model and removes the need for a stall/ready handshake.
+The accelerator has three jobs: walk the CSR structure of matrix $A$, stream
+row segments of matrix $B$ into a local buffer, and accumulate products into
+a tile of the output matrix $C$. Everything else in the design follows from
+that pattern.
+
+Rather than build one monolithic pipeline, the accelerator splits into two
+co-operating modules:
+
+\begin{itemize}
+  \item \texttt{accel\_ctrl}: a finite state machine that walks the CSR
+        indices, issues RAM requests, and sequences the datapath.
+  \item \texttt{accel\_datapath}: the MAC array and the two local buffers
+        (\texttt{B\_Seg} and \texttt{C\_Tile}) that hold the working set of
+        a single tile.
+\end{itemize}
+
+A top-level wrapper (\texttt{accel\_top}) connects the two blocks through a
+small MMIO front-end that decodes the PicoRV32 bus and surfaces the
+configuration registers listed in Table~\ref{tab:mmio-regs}. The accelerator
+reaches memory through Port~B of the dual-port BRAM, which returns one
+32-bit word per cycle with one cycle of registered read latency. Because
+that latency is fixed, every RAM access is scheduled deterministically and
+no stall/ready handshake is needed.
+
+The remaining sections look at each piece in turn, starting with the
+datapath.
 
 \section{Baseline Datapath}
 
-The datapath is parameterised by a tile width $TN = 8$ (the number of
-output columns processed in parallel), a maximum row count
-$M_{\mathrm{max}} = 64$, and a 32-bit signed operand width. Its behaviour
-depends on two local buffers whose sizing is critical to performance. The
-first, \texttt{B\_Seg}, is an eight-element array of signed 32-bit values
-that holds the current row segment of dense matrix $B$: for every nonzero
-$a_{ij}$ the controller fills \texttt{B\_Seg} with
-$B[j,\,c_0:c_0{+}TN]$ before enabling the MAC array. The second,
-\texttt{C\_Tile}, is an $M_{\mathrm{max}} \times TN$ array of signed 32-bit
-partial sums that accumulates the output tile for all rows of $C$
-simultaneously within the current tile column $[c_0, c_0{+}TN)$. Using a
-flat two-dimensional accumulator rather than per-row registers avoids
-writeback/restore cycles when nonzeros from different rows touch the same
-tile column, which is the common case in realistically distributed sparse
-matrices. The C-tile is implemented as a 512-register fabric array rather
-than BRAM; on the Cyclone~V each ALM carries two registers, so the tile
-consumes roughly 256 ALMs, well within the budget of the target device.
+The datapath is where the arithmetic happens. It is parameterised by three
+numbers: the tile width $TN = 8$ (the number of output columns processed in
+parallel), a maximum row count $M_{\mathrm{max}} = 64$, and a 32-bit signed
+operand width. Figure~\ref{fig:datapath} shows the block diagram.
 
-For each nonzero $a = A[i,k]$ the controller asserts \texttt{mac\_en},
-\texttt{mac\_row} $= i$, and \texttt{mac\_a} $= a$, and the datapath issues
-eight simultaneous signed multiply--accumulate operations:
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    font=\small,
+    block/.style={draw, thick, rounded corners=2pt, minimum height=0.9cm,
+                  minimum width=2.2cm, align=center},
+    buffer/.style={draw, thick, minimum height=0.6cm, minimum width=0.55cm,
+                   align=center, font=\footnotesize},
+    macbox/.style={draw, thick, circle, minimum size=0.65cm,
+                   inner sep=0pt, font=\footnotesize},
+    tilecell/.style={draw, thick, minimum height=0.45cm, minimum width=0.55cm,
+                     font=\scriptsize, inner sep=0pt},
+    arr/.style={-{Stealth[length=2mm]}, thick}
+  ]
+    \node[block, fill=blue!10]  (ctrl) at (-5.5, 0) {\texttt{accel\_ctrl}\\(FSM)};
+    \node[block, fill=gray!15]  (bram) at ( 0, 3.0) {BRAM Port~B\\(shared RAM)};
+
+    \foreach \i/\x in {0/-2.1, 1/-1.55, 2/-1.0, 3/-0.45,
+                       4/0.1, 5/0.65, 6/1.2, 7/1.75} {
+      \node[buffer, fill=orange!10] (bs\i) at (\x, 1.4) {};
+    }
+    \node[font=\footnotesize, above=1pt of bs0, anchor=south east,
+          xshift=5pt] {\texttt{B\_Seg}};
+
+    \foreach \i/\x in {0/-2.1, 1/-1.55, 2/-1.0, 3/-0.45,
+                       4/0.1, 5/0.65, 6/1.2, 7/1.75} {
+      \node[macbox, fill=green!15] (m\i) at (\x, 0.3) {$\times$};
+    }
+    \node[font=\footnotesize, left=2pt of m0] {MAC$\times 8$};
+
+    \node[draw, thick, rounded corners=2pt, fit={(-2.5,-1.6) (2.15,-0.5)},
+          fill=purple!8, inner sep=1pt,
+          label={[font=\footnotesize, yshift=-2pt]below:%
+                 \texttt{C\_Tile} ($M_{\mathrm{max}} \times TN$ accumulators)}]
+          (ctile) {};
+    \foreach \r in {0,1,2} {
+      \foreach \c in {0,1,2,3,4,5,6,7} {
+        \pgfmathsetmacro{\x}{-2.15 + 0.55*\c}
+        \pgfmathsetmacro{\y}{-0.75 - 0.28*\r}
+        \node[tilecell, fill=purple!5] at (\x, \y) {};
+      }
+    }
+    \node[font=\footnotesize] at (0, -1.1) {$\vdots$};
+
+    \node[block, fill=yellow!20] (wb) at (5.2, -1.1) {Writeback\\(+ ReLU)};
+
+    \draw[arr] (ctrl.north) |- node[near end, above, font=\footnotesize]
+               {addr/read} (bram.west);
+    \draw[arr] (bram.south) -- node[right, font=\footnotesize]{B words}
+               (0, 1.75);
+    \draw[arr] (ctrl.east) -- node[above, font=\footnotesize]
+               {\texttt{mac\_a}, \texttt{mac\_row}, \texttt{mac\_en}}
+               (m0.west);
+
+    \foreach \i in {0,1,2,3,4,5,6,7} {
+      \draw[arr, shorten >=1pt] (bs\i.south) -- (m\i.north);
+      \draw[arr, shorten >=1pt] (m\i.south) -- (m\i |- ctile.north);
+    }
+
+    \draw[arr] (ctile.east) -- (wb.west);
+    \draw[arr] (wb.north) |- (bram.east);
+  \end{tikzpicture}
+  \caption{Baseline datapath. The controller fills \texttt{B\_Seg} from
+           Port~B of the shared BRAM, drives the common operand
+           \texttt{mac\_a} to all eight MAC lanes, and selects the target
+           row of \texttt{C\_Tile}. Once a tile column is complete, the
+           writeback path streams \texttt{C\_Tile} back to memory, applying
+           ReLU if enabled.}
+  \label{fig:datapath}
+\end{figure}
+
+Two local buffers carry the state of a tile.
+
+\textbf{\texttt{B\_Seg}} is an eight-element array of 32-bit signed values
+that holds the row segment of $B$ currently being consumed. For each nonzero
+$a_{ij}$ in row $i$ of $A$, the controller fills \texttt{B\_Seg} with
+$B[j, c_0:c_0{+}TN]$ before the MAC fires.
+
+\textbf{\texttt{C\_Tile}} is an $M_{\mathrm{max}} \times TN$ array of 32-bit
+signed accumulators that holds the partial sums for every row of $C$ within
+the current tile column $[c_0, c_0{+}TN)$. It is implemented as fabric
+registers (around 256 ALMs on Cyclone~V), not BRAM, so every entry can be
+read and updated on the same cycle. Keeping it flat, rather than as a set
+of per-row registers, matters because nonzeros from different rows often
+land in the same tile column and the flat layout lets those updates proceed
+back-to-back with no writeback/restore cycles between them.
+
+The core operation is one line. For each nonzero $a = A[i, k]$ the
+controller asserts \texttt{mac\_en}, drives \texttt{mac\_row} $= i$ and
+\texttt{mac\_a} $= a$, and the datapath issues eight parallel MACs in a
+single clock:
 \[
-  \texttt{C\_Tile}[i][c] \;\mathrel{+}=\; \texttt{mac\_a} \,\times\,
-  \texttt{B\_Seg}[c] \qquad c = 0, 1, \ldots, TN{-}1.
+  \texttt{C\_Tile}[i][c] \;\mathrel{+}=\; a \,\times\, \texttt{B\_Seg}[c],
+  \qquad c = 0, 1, \ldots, TN{-}1.
 \]
-This is the key mapping that gives the accelerator its parallelism: a
-single nonzero in $A$ interacts with an entire row segment of $B$, so one
-issue cycle produces $TN$ output updates. The parallelism is across the
-dense output dimension, where the workload is regular, rather than along
-the sparse dimension, where it is not. When all rows have been processed
-in the current tile column, the C-tile is streamed back to shared RAM row
-by row; if \texttt{CTRL.relu\_en} is asserted, an element-wise
-$\max(0, \cdot)$ is applied to each value on writeback, making the
-accelerator directly usable as the fully-connected layer of a neural
-network inference pipeline.
+
+That expression shows where the parallelism comes from: a single nonzero in
+$A$ meets an entire row segment of $B$, so one issue cycle produces $TN$
+output updates. The parallelism lies along the dense-output dimension, which
+is regular, rather than along the sparse dimension, which is not.
+Figure~\ref{fig:tile-illustration} shows the tile column inside $C$ that
+this corresponds to.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    font=\footnotesize,
+    cell/.style={draw, minimum width=0.45cm, minimum height=0.45cm,
+                 inner sep=0pt},
+    arr/.style={-{Stealth[length=2mm]}, thick}
+  ]
+    \foreach \r in {0,1,2,3} {
+      \foreach \c in {0,...,11} {
+        \pgfmathtruncatemacro{\intile}{(\c<8)?1:0}
+        \ifnum\intile=1
+          \node[cell, fill=blue!15] at (0.45*\c, -0.45*\r) {};
+        \else
+          \node[cell, fill=gray!8]  at (0.45*\c, -0.45*\r) {};
+        \fi
+      }
+    }
+
+    \node[left, xshift=-2pt] at (0,  0)     {row $0$};
+    \node[left, xshift=-2pt] at (0, -0.45)  {row $1$};
+    \node[left, xshift=-2pt] at (0, -0.9)   {row $2$};
+    \node[left, xshift=-2pt] at (0, -1.35)  {row $3$};
+
+    \draw[decorate, decoration={brace, amplitude=4pt}, thick]
+      (-0.25, 0.3) -- (3.4, 0.3)
+      node[midway, above=5pt]{current tile column ($TN = 8$)};
+
+    \draw[decorate, decoration={brace, amplitude=4pt, mirror}, thick]
+      (-0.25, -1.65) -- (5.2, -1.65)
+      node[midway, below=5pt]{output matrix $C$ (dense width $N$)};
+
+    \node[right] at (6.0, -0.4)
+      {\begin{tabular}{l}
+         \texttt{C\_Tile} accumulates \\
+         the highlighted columns \\
+         for all rows of $C$ \\
+         before writeback.
+       \end{tabular}};
+  \end{tikzpicture}
+  \caption{Tile column view. While the accelerator works on one tile
+           column, the highlighted eight columns of $C$ are held in
+           \texttt{C\_Tile} across all rows. Nonzeros from any row of $A$
+           update their respective \texttt{C\_Tile} row directly.}
+  \label{fig:tile-illustration}
+\end{figure}
+
+Once every row has been visited for the current tile column, the datapath
+walks \texttt{C\_Tile} row by row and writes each entry back to shared RAM.
+If \texttt{CTRL.relu\_en} is set, an element-wise $\max(0, \cdot)$ is applied
+on the writeback path, so the accelerator can serve directly as the
+fully-connected layer of a neural-network inference pipeline.
 
 \section{Control FSM}
 \label{sec:fsm}
 
-The control FSM is the most intricate component of the design. It drives
-all address generation, RAM sequencing, nonzero traversal, and tile
-management, and cycles through the phases listed in
-Table~\ref{tab:fsm-states}; the sub-phase indices within
-\texttt{ROW\_LOAD} and \texttt{NZ\_FETCH} exist specifically to cover the
-one-cycle registered RAM latency. The simplified state-level view is
-shown in Figure~\ref{fig:accel-fsm}.
+The control FSM drives the datapath. It generates every RAM address, tracks
+the CSR traversal, and decides when to fill \texttt{B\_Seg}, fire a MAC, or
+flush \texttt{C\_Tile} back to memory. Table~\ref{tab:fsm-states} lists its
+states, and Figure~\ref{fig:accel-fsm} shows the transitions.
 
 \begin{table}[htbp]
   \centering
   \small
-  \begin{tabular}{p{3.8cm}p{8.6cm}}
+  \begin{tabular}{p{3.8cm}p{10cm}}
   \toprule
   State & Action \\
   \midrule
   \texttt{IDLE} &
-    Wait for \texttt{start} pulse. Load $M$, $N$, $K$, NNZ, and base
+    Wait for \texttt{start} pulse. Latch $M$, $N$, $K$, NNZ, and base
     addresses from the MMIO register snapshot. \\[4pt]
   \texttt{INIT\_TILE\_CLEAR} &
     Clear all entries of \texttt{C\_Tile} to zero in preparation for the
-    first tile column (one row per cycle, $M_{\mathrm{max}}$ cycles). \\[4pt]
+    first tile column ($M_{\mathrm{max}}$ cycles, one row per cycle). \\[4pt]
   \texttt{ROW\_LOAD} &
-    Load the CSR row bounds for the current row $i$: issue reads for
-    \texttt{rowptr[i]} and \texttt{rowptr[i+1]}; handle the registered RAM
-    output latency using sub-phases \texttt{ROW\_PHASE\_0/1/2}. \\[4pt]
+    Read the CSR row bounds \texttt{rowptr[i]} and \texttt{rowptr[i+1]} for
+    the current row~$i$. Sub-phases \texttt{ROW\_PHASE\_0/1/2} absorb the
+    registered RAM latency. \\[4pt]
   \texttt{NZ\_FETCH} &
     For each nonzero in \texttt{[rowptr[i], rowptr[i+1])}: read
     \texttt{values[p]} and \texttt{colidx[p]} and compute the starting
@@ -100,19 +233,19 @@ shown in Figure~\ref{fig:accel-fsm}.
     address arithmetic. \\[4pt]
   \texttt{MAC} &
     Fill \texttt{B\_Seg} with $TN$ consecutive values from $B$ (one per
-    clock in INT32 mode, two reads total in INT8 mode), then assert
+    cycle in INT32 mode, two reads total in INT8 mode), then assert
     \texttt{mac\_en} for one cycle to update \texttt{C\_Tile}. \\[4pt]
   \texttt{NEXT\_ROW} &
-    Increment the row index. If more rows remain in this tile column, loop
+    Increment the row index. If rows remain in this tile column, loop back
     to \texttt{ROW\_LOAD}; otherwise proceed to \texttt{WRITE\_TILE}. \\[4pt]
   \texttt{WRITE\_TILE} &
     Write all $M \times TN$ entries of \texttt{C\_Tile} back to shared RAM
-    (with optional ReLU). Advance the tile column offset by $TN$; if more
+    (with optional ReLU). Advance the tile-column offset by $TN$; if more
     tile columns remain, clear \texttt{C\_Tile} and loop to
     \texttt{ROW\_LOAD}, otherwise proceed to \texttt{DONE}. \\[4pt]
   \texttt{DONE} &
-    Assert \texttt{STATUS.done} and release \texttt{STATUS.busy}; return
-    to \texttt{IDLE} when \texttt{clear\_done} is asserted by the CPU. \\
+    Assert \texttt{STATUS.done} and release \texttt{STATUS.busy}; return to
+    \texttt{IDLE} when \texttt{CTRL.clear\_done} is asserted. \\
   \bottomrule
   \end{tabular}
   \caption{Accelerator FSM states and their actions.}
@@ -125,50 +258,48 @@ shown in Figure~\ref{fig:accel-fsm}.
   \caption{Simplified accelerator finite state machine. Each major phase
            corresponds to one row in Table~\ref{tab:fsm-states}. Sub-phase
            transitions within \texttt{ROW\_LOAD} and \texttt{NZ\_FETCH}
-           handle the one-cycle registered RAM output latency.}
+           absorb the one-cycle registered RAM output latency.}
   \label{fig:accel-fsm}
 \end{figure}
 
-For a matrix with $M$ rows, NNZ nonzeros, and dense width $N$ (processed
-in $N/TN$ tile columns), the approximate cycle budget per tile column is
+In plain terms, the outer loop walks tile columns, the middle loop walks
+rows, and the inner loop walks the nonzeros of each row. For every nonzero
+the FSM fetches the column index and the value, fills \texttt{B\_Seg}, fires
+one MAC cycle, and moves on. When the last row finishes, the whole tile is
+written back and the column offset advances by $TN$; when the last tile
+column finishes, the accelerator raises \texttt{STATUS.done}. The sub-phases
+inside \texttt{ROW\_LOAD} and \texttt{NZ\_FETCH} exist only to absorb the
+one-cycle BRAM read latency: the address is driven on one cycle and the
+data is consumed on the next.
+
+A first-order cycle model per tile column is
 \[
   T_{\mathrm{tile}} \approx M_{\mathrm{max}} + M \cdot C_{\mathrm{row}}
   + \text{NNZ} \cdot (C_{\mathrm{nz}} + TN) + M \cdot TN \cdot C_{\mathrm{wb}},
 \]
-with $C_{\mathrm{row}} \approx 5$ cycles per row-bound load,
-$C_{\mathrm{nz}} \approx 5$ cycles per nonzero fetch, and
-$C_{\mathrm{wb}} \approx 1$ cycle per output writeback. At $TN = 8$ the
-nonzero fetch and $B$-segment fill together contribute roughly
-$5 + 8 = 13$ cycles per nonzero, and the reader will see directly how
-shrinking the $TN$-dependent term is what the INT8 optimisation later
-attacks.
+with $C_{\mathrm{row}} \approx 5$, $C_{\mathrm{nz}} \approx 5$, and
+$C_{\mathrm{wb}} \approx 1$. The model is deliberately approximate: it
+ignores writeback overlap and assumes no stalls. Its purpose is to expose
+the weight of the $\text{NNZ} \cdot TN$ term. At $TN = 8$, filling
+\texttt{B\_Seg} costs eight cycles per nonzero, which dominates the other
+terms in every realistic case. Section~\ref{sec:bseg} explains why, and
+Section~\ref{sec:int8} attacks that term directly.
 
 \section{The Choice of Tile Width}
 \label{sec:tn-choice}
 
-The tile width $TN$ sets the degree of parallelism in the dense dimension,
-and its selection is a balance between arithmetic throughput, register
-array size, memory-access burden, and routing feasibility on the target
-device. Table~\ref{tab:tn-tradeoffs} summarises the options. At $TN = 1$
-the accelerator degenerates to a sequential MAC with no parallel benefit;
-$TN = 4$ offers modest parallelism at the price of halving the reuse of
-each fetched $B$ segment; $TN = 16$ or $TN = 32$ doubles or quadruples the
-register array and the number of required DSP blocks, at which point both
-routing congestion and timing closure become the limiting factor on a
-Cyclone~V that already carries a CPU, BRAM, UART, and GPIO. A tile width
-of eight maps cleanly onto eight DSP multiply--accumulate blocks, keeps
-the 512-register C-tile within practical limits, and covers the smallest
-benchmark width ($N = 8$) in a single tile column so no case in the suite
-is penalised by tiling overhead. It was also the largest width that
-consistently closed timing at 50\,MHz in preliminary synthesis, which
-settled the choice for the final design.
+This section explains why the tile width is set to eight. $TN$ controls four
+things at once: how many MAC lanes run in parallel, how large the
+accumulator array is, how many RAM reads are needed to fill
+\texttt{B\_Seg}, and how hard the design is to route at 50\,MHz.
+Table~\ref{tab:tn-tradeoffs} lists the alternatives.
 
 \begin{table}[htbp]
   \centering
   \small
-  \begin{tabular}{lccccp{3.8cm}}
+  \begin{tabular}{lccccp{3cm}}
   \toprule
-  $TN$ & MAC lanes & Acc.\ registers & B-seg reads/NZ & DSP estimate & Notes \\
+  $TN$ & MAC lanes & Acc.\ registers & B-seg reads/NZ & DSP No. & Notes \\
   \midrule
   1  & 1 & 64 & 1 & 1 &
     Minimal resources; no parallelism; effectively sequential. \\
@@ -177,7 +308,7 @@ settled the choice for the final design.
   8  & 8 & 512 & 8 & 8 &
     \textbf{Design point.} Good balance; DSP-mappable; 512-reg array feasible. \\
   16 & 16 & 1024 & 16 & 16 &
-    Doubles resources; increases routing congestion; timing harder to close. \\
+    Doubles resources; routing congestion; timing harder to close. \\
   32 & 32 & 2048 & 32 & 32 &
     Likely infeasible on Cyclone~V; 2048-reg array exceeds practical limits. \\
   \bottomrule
@@ -187,140 +318,202 @@ settled the choice for the final design.
   \label{tab:tn-tradeoffs}
 \end{table}
 
+At $TN = 1$ there is no parallelism at all. At $TN = 4$ the reuse of each
+fetched $B$ segment is halved. At $TN = 16$ or $32$ the C-tile grows past a
+thousand registers, eight or more extra DSP lanes have to be routed
+alongside the CPU, BRAM, UART and GPIO already in the fabric, and trial
+builds stopped closing timing at 50\,MHz. $TN = 8$ is the largest width
+that met timing in those trials. It also fits eight DSP blocks cleanly,
+keeps \texttt{C\_Tile} at 512 registers, and covers the smallest benchmark
+case ($N = 8$) in a single tile column so no case is penalised by tiling
+overhead.
+
 \section{Algorithmic Decomposition: Row-Wise CSR Traversal}
 
-The first and most consequential design decision was algorithmic: process
-CSR rows serially and tile only the dense dimension. Alternatives such as
-outer-product decomposition (as in OuterSPACE~\citep{outerspace2018}) or
-intersection-based skipping (as in ExTensor~\citep{extensor2019}) can
-deliver higher throughput in certain regimes, but they do so by introducing
-index-merge networks, multi-port accumulation, and in some cases
-content-addressable storage, none of which are feasible inside the SoC
-budget of this project. Row-wise CSR traversal keeps the FSM tractable
-enough to verify by hand, keeps the BRAM Port~B access pattern regular so
-no bank conflicts arise, and keeps the C-tile writeback purely sequential
-with no merge logic. The simplicity pays for itself in both correctness
-confidence and timing-closure margin.
+This section explains why the accelerator walks $A$ row by row rather than
+using an outer-product or intersection-based approach.
+
+The datapath and FSM both assume a specific traversal order: rows of $A$
+visited one at a time, with tiling only across the dense-output dimension.
+The alternative was an outer-product decomposition (as in
+OuterSPACE~\citep{outerspace2018}) or intersection-based skipping (as in
+ExTensor~\citep{extensor2019}). Both can deliver higher throughput on
+particular sparsity patterns, but both need index-merge networks, multi-port
+accumulation, and in some cases content-addressable memory. None of that
+fits inside the SoC budget of this project.
+
+Row-wise CSR keeps three things simple. The FSM only has to track one row
+pointer at a time. The BRAM Port~B access pattern stays mostly sequential
+with no bank conflicts. And \texttt{C\_Tile} writeback is a straight sweep
+with no merge logic. These properties are what allowed the design to be
+verified by hand in simulation before synthesis.
 
 \section{Memory Optimisation: the B-Segment Bottleneck}
+\label{sec:bseg}
 
-The conceptual roofline interpretation introduced in
-Section~\ref{sec:roofline} can now be made concrete for this platform.
-Operating at 50\,MHz with a $TN = 8$ parallel MAC array, the peak
-arithmetic throughput is
+This section explains why the baseline accelerator is memory-bound and why
+the $B$-segment fill is the dominant cost.
+
+Operating at 50\,MHz with $TN = 8$ parallel MAC lanes, the peak arithmetic
+throughput is
 \[
   T_{\mathrm{peak}} = 8 \;\text{MACs/cycle} \;\times\; 50 \;\text{MHz}
                     = 400 \;\text{MMACs/s}.
 \]
-A single dual-port M10K block, shared between the accelerator and the CPU,
-supplies one 32-bit read per cycle to the accelerator in the common case,
-giving an effective operand bandwidth of around 200\,MB/s. Filling one
-$TN = 8$ segment requires eight 32-bit reads, so the MAC units are stalled
-waiting for operands roughly $8\times$ more than they are computing: the
-baseline design sits well to the left of the roofline knee.
+Port~B of the BRAM supplies one 32-bit word per cycle, or about 200\,MB/s
+of operand bandwidth. Filling a $TN = 8$ segment from 32-bit operands costs
+eight reads, so the MAC lanes wait for operands roughly eight times longer
+than they compute. The design sits well to the left of the roofline knee
+introduced in Section~\ref{sec:roofline}, and any optimisation that does
+not shrink the $B$-fill term is capped at a small fraction of the ideal
+speedup.
 
-In the baseline configuration, filling \texttt{B\_Seg} for a single
-nonzero requires $TN = 8$ consecutive 32-bit RAM reads. With the one-cycle
-registered latency each fill therefore takes at least $TN + 1 = 9$ cycles,
-and the subsequent MAC another cycle, so roughly ten cycles of useful work
-accumulate per nonzero once the segment is in place. These reads dominate
-the per-nonzero cost entirely, and any architectural improvement that
-leaves them untouched is bounded in impact.
-
-INT8 packing is the architectural lever that directly addresses the
-bottleneck. With matrix $B$ stored as packed INT8 at four values per
-32-bit word, two consecutive aligned 32-bit reads deliver all eight INT8
-values required to fill a $TN = 8$ segment, and the hardware extracts the
-individual bytes in a single combinatorial stage:
-\begin{equation}
-  \texttt{B\_Seg}[4k + b] = \mathrm{sign\_ext}_{8 \to 32}
-  \!\left( \texttt{ram\_rdata}[8(b{+}1){-}1 : 8b] \right),
-  \quad b \in \{0, 1, 2, 3\},
-  \label{eq:byte-extract}
-\end{equation}
-where the selected byte is placed in the lower eight bits of a 32-bit
-register and the upper 24 bits are filled with the sign of that byte.
-The segment fill therefore drops from eight cycles to two, a $4\times$
-reduction in the memory-bound component of the per-nonzero cycle budget,
-with no additional pipeline stage and no change to accumulation precision.
+Breaking the per-nonzero cycle count down makes this explicit. In the
+baseline, each nonzero takes about ten cycles of useful work: eight to fill
+\texttt{B\_Seg}, plus one cycle of registered read latency on the first
+word, plus one MAC cycle. Of those ten, the eight fill cycles are entirely
+memory-bound. The next section looks at what can be done on the arithmetic
+side; Section~\ref{sec:int8} then addresses the memory side directly.
 
 \section{DSP-Oriented Parallel MAC Enhancement}
+\label{sec:dsp}
 
-The second optimisation stage restructured the MAC array to increase the
-fraction of DSP blocks utilised per cycle. On the Cyclone~V, each DSP
-block implements an 18$\times$18-bit signed multiplier followed by a
-dedicated accumulator register, but the synthesis tool maps RTL
-multipliers onto these blocks only if the operand widths and
-accumulation structure match the block's
-configuration~\citep{intel_dsp_blocks}. In the baseline design the eight
-MAC operations are described as generic 32-bit multipliers; depending on
-register fan-out and routing pressure, Quartus may or may not pack them
-into DSP blocks, and in practice some lanes were being inferred in ALM
-logic.
+This section covers the first optimisation stage, which improves how the
+eight MAC lanes map onto Cyclone~V DSP blocks.
 
-The DSP MAC stage rewrites the multiply--accumulate explicitly in the
-registered-feedback form that the tool recognises as DSP-friendly:
+Each DSP block on Cyclone~V provides an 18$\times$18-bit signed multiplier
+with a dedicated accumulator register~\citep{intel_dsp_blocks}. Quartus
+will map an RTL multiplier onto a DSP block, but only when the operand
+widths and the accumulator structure match what the block expects. In the
+baseline the eight MACs are written as generic 32-bit multiplications, and
+depending on register fan-out and routing pressure some lanes were inferred
+in ALM logic rather than in DSP blocks.
+
+The DSP MAC stage rewrites each lane in the registered-feedback form that
+Quartus recognises:
 \[
   \texttt{C\_Tile}[i][c] \;\leftarrow\; \texttt{C\_Tile}[i][c] + a \cdot B[c],
 \]
-using 32-bit signed operands and a registered accumulator. With this
-structure Quartus maps each of the eight MAC lanes independently onto a
-dedicated DSP multiplier/accumulator block rather than inferring ALM-based
-multiplier cascades, and the resulting design completes each MAC in one
-clock cycle with less ALM logic and lower power dissipation. Across the
-full 12-case benchmark sweep this stage reduced total accelerator offload
-cycles from 427,299 to 324,568, a $1.32\times$ improvement. The modest
-gain is itself the interesting result: it confirms that the baseline was
-not limited by arithmetic execution, and that further attention has to be
-paid to memory traffic if the speedup ceiling is to move.
+with 32-bit signed operands and a registered accumulator. With this form
+all eight lanes map onto dedicated DSP multiply/accumulator blocks, each
+MAC completes in one cycle, and the ALM usage of the arithmetic core drops.
+
+End-to-end cycles across the benchmark suite improved by roughly
+$1.3\times$. The modest size of the gain is informative: the baseline was
+already not compute-bound, so the headline speedup has to come from the
+memory side. That is what Section~\ref{sec:int8} does.
 
 \section{INT8 Mode at the Datapath Level}
+\label{sec:int8}
 
-When \texttt{CTRL.int8\_mode} is asserted, three specific aspects of the
-datapath change. The CSR \texttt{values} array is now stored as packed
-INT8, and the controller tracks the byte offset of the current nonzero
-within its 32-bit word using a two-bit counter: for nonzero index $p$ the
-byte offset is $b = p \bmod 4$ and the enclosing word lives at
-\texttt{A\_VAL\_BASE} $+ \lfloor p/4 \rfloor \times 4$, from which the
-same sign-extension circuit used for $B$-byte extraction
-(Equation~\ref{eq:byte-extract}) recovers a full-precision 32-bit $a$
-before multiplication. The $B$-segment fill is replaced with the two-read
-path described in the previous section, filling all eight lanes of
-\texttt{B\_Seg} in two cycles instead of eight. Accumulation itself is
-unchanged: every entry of \texttt{C\_Tile} remains INT32 throughout
-computation, sign extension before multiplication ensures that products
-and partial sums are always full-precision signed integers, and the
-writeback path and MMIO interface see no INT8-specific modification. The
-net effect is a $4\times$ reduction in $B$-segment memory traffic with no
-cost in accumulator precision, output format, or control complexity.
+This section describes what changes in the datapath when INT8 mode is
+enabled. The goal here is implementation detail; the broader argument for
+why INT8 was the right choice for this workload appears in
+Chapter~\ref{ch:motivation}.
+
+When \texttt{CTRL.int8\_mode} is set, three specific things change:
+
+\begin{enumerate}
+  \item \textbf{The CSR \texttt{values} array is packed as four INT8 per
+        32-bit word.} For nonzero index $p$ the byte lives at
+        \texttt{A\_VAL\_BASE} $+ \lfloor p/4 \rfloor \times 4$, and the
+        controller tracks the byte offset $b = p \bmod 4$ with a two-bit
+        counter.
+  \item \textbf{Matrix $B$ is packed the same way.} The eight values needed
+        to fill \texttt{B\_Seg} now come from two aligned 32-bit reads
+        instead of eight.
+  \item \textbf{Each selected byte is sign-extended to 32 bits} in a single
+        combinatorial stage before it reaches the multiplier:
+        \begin{equation}
+          \texttt{B\_Seg}[4k + b] = \mathrm{sign\_ext}_{8 \to 32}
+          \!\left( \texttt{ram\_rdata}[8(b{+}1){-}1 : 8b] \right),
+          \quad b \in \{0, 1, 2, 3\}.
+          \label{eq:byte-extract}
+        \end{equation}
+\end{enumerate}
+
+Figure~\ref{fig:int8-extract} shows the byte-select and sign-extend path
+for one 32-bit read.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    font=\footnotesize,
+    byte/.style={draw, thick, minimum width=1.1cm, minimum height=0.7cm,
+                 align=center},
+    sext/.style={draw, thick, rounded corners=2pt, fill=orange!15,
+                 minimum width=1.6cm, minimum height=0.7cm, align=center,
+                 font=\small},
+    opbox/.style={draw, thick, minimum width=1.6cm, minimum height=0.7cm,
+                  align=center, font=\footnotesize},
+    arr/.style={-{Stealth[length=2mm]}, thick}
+  ]
+    \node[byte, fill=blue!10] (b3) at (-3.3, 2.2) {byte~3};
+    \node[byte, fill=blue!10] (b2) at (-1.1, 2.2) {byte~2};
+    \node[byte, fill=blue!10] (b1) at ( 1.1, 2.2) {byte~1};
+    \node[byte, fill=blue!10] (b0) at ( 3.3, 2.2) {byte~0};
+
+    \node[draw, thick, fit=(b3)(b0), inner sep=3pt, rounded corners=2pt,
+          label={[font=\small\bfseries]above:%
+                 32-bit word from BRAM Port~B}] (word) {};
+
+    \node[sext] (s3) at (-3.3, 0.6) {sign-ext};
+    \node[sext] (s2) at (-1.1, 0.6) {sign-ext};
+    \node[sext] (s1) at ( 1.1, 0.6) {sign-ext};
+    \node[sext] (s0) at ( 3.3, 0.6) {sign-ext};
+
+    \node[opbox, fill=green!10] (o3) at (-3.3, -0.9) {32-bit op};
+    \node[opbox, fill=green!10] (o2) at (-1.1, -0.9) {32-bit op};
+    \node[opbox, fill=green!10] (o1) at ( 1.1, -0.9) {32-bit op};
+    \node[opbox, fill=green!10] (o0) at ( 3.3, -0.9) {32-bit op};
+
+    \foreach \n in {0,1,2,3} {
+      \draw[arr] (b\n.south) -- (s\n.north);
+      \draw[arr] (s\n.south) -- (o\n.north);
+    }
+
+    \node[font=\footnotesize, below=4pt of o0.south, xshift=-4.5cm]
+      {\textit{feeds four lanes of \texttt{B\_Seg} in one cycle}};
+  \end{tikzpicture}
+  \caption{INT8 byte-select and sign-extension path. One 32-bit read
+           delivers four INT8 operands; each is sign-extended to 32 bits
+           in a single combinatorial stage before it reaches a MAC lane.
+           Two such reads fill all eight lanes of \texttt{B\_Seg}.}
+  \label{fig:int8-extract}
+\end{figure}
+
+Accumulation and the writeback path are unchanged. Every entry of
+\texttt{C\_Tile} stays INT32 throughout the computation, the multiplier
+still sees a full-precision 32-bit operand (the upper 24 bits are just the
+sign), and the output matrix $C$ is still written as 32-bit words. The
+whole change touches only the memory-facing side of the datapath.
 
 \section{Physical Design Tradeoffs}
 
-Adding the C-tile register array, the $B$-segment buffer, and eight
-DSP-mapped MAC lanes markedly increases the net fan-out between the
-controller and the datapath. The \texttt{mac\_a} operand in particular
-must be distributed to all eight multiplier inputs simultaneously, and on
-the Cyclone~V a register with a fan-out of eight combined with several
-other wide buses (the BRAM port, address lines, register-file data paths)
-creates routing congestion that is not visible in RTL simulation. The
-target frequency is 50\,MHz, giving a 20\,ns period, and although modern
-FPGA synthesis comfortably reaches 100--200\,MHz with DSP-mapped
-multipliers, the critical path in this design is not the multiplier
-itself but the combinatorial logic that generates CSR addresses and feeds
-eight parallel writes into the C-tile. One synthesis attempt during the
-DSP MAC stage failed to close timing until routing-affinity settings were
-adjusted, and the incident is the concrete source of the lesson recorded
-in Chapter~\ref{ch:reflection} that parallelism in FPGA designs carries
-costs beyond logic area.
+This section covers the practical FPGA constraints that shaped the design
+beyond the RTL-level decisions above.
 
-Table~\ref{tab:design-evolution} summarises the three hardware stages in
-terms of their key architectural attributes. The common thread across the
-rows is that the MAC width, the accumulator precision, and the output
-format remain fixed at eight lanes, INT32, and INT32 respectively; what
-changes between stages is whether the MAC maps to DSP blocks explicitly
-and how many RAM reads the $B$-segment fill demands. Those two changes
-alone account for the full $2.87\times$ cycle reduction observed from
-baseline to final INT8 build.
+Adding the C-tile register array, the $B$-segment buffer, and eight
+DSP-mapped MACs raises the fan-out of several controller signals. The
+\texttt{mac\_a} operand in particular has to drive all eight multiplier
+inputs at once. On Cyclone~V, a high-fan-out register combined with the
+wide BRAM port, the CSR-address paths, and the tile writeback network
+creates routing congestion that does not appear in RTL simulation.
+
+The target clock is 50\,MHz, a comfortable 20\,ns period. Cyclone~V designs
+with DSP-mapped multipliers routinely reach 100--200\,MHz, so the multiplier
+is not the critical path. The critical path is the combinatorial logic that
+generates CSR addresses and drives eight parallel writes into
+\texttt{C\_Tile}. One synthesis run during the DSP stage failed to close
+timing until routing-affinity settings were adjusted. That incident is the
+concrete source of the reflection in Chapter~\ref{ch:reflection} on the
+hidden costs of parallelism on FPGAs.
+
+Table~\ref{tab:design-evolution} summarises what changed across the three
+stages. The MAC width, accumulator precision, and output format stay the
+same (8 lanes, INT32, INT32). The DSP mapping and the per-nonzero $B$-fill
+cost are the only things that vary, and those two knobs account for the
+cycle reduction from baseline to final INT8 build.
 
 \begin{table}[htbp]
   \centering
@@ -335,10 +528,10 @@ baseline to final INT8 build.
   Operand bit-width & 32-bit & 32-bit & 8-bit (sign-ext to 32) \\
   Accumulator precision & INT32 & INT32 & INT32 \\
   Output format & INT32 & INT32 & INT32 \\
-  Avg.\ speedup over PicoRV32 SW & $16.12\times$ & $20.87\times$ & $45.28\times$ \\
   \bottomrule
   \end{tabular}
-  \caption{Architectural attributes and measured average speedup for each
-           design stage across the 12-case benchmark suite.}
+  \caption{Architectural attributes across the three design stages. Measured
+           speedups for each stage are reported in
+           Chapter~\ref{ch:reflection}.}
   \label{tab:design-evolution}
 \end{table}

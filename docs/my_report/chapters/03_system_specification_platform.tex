@@ -13,10 +13,10 @@ subject of Chapter~\ref{ch:design}.
 The SoC is synthesised entirely into FPGA fabric on the Terasic DE1-SoC
 development board~\citep{de1soc_manual}. The hard ARM Cortex-A9 on the HPS side
 of the device is unused, so the whole design is self-contained in
-programmable logic. Every block in the benchmark path lives on-chip: firmware,
+programmable logic. All benchrmark code and data reside on chip: firmware,
 CSR arrays, the dense matrix $B$, and the output matrix $C$ all reside in a
-shared 64\,KB dual-port block RAM. The design runs from the 50\,MHz on-board
-oscillator.
+shared 64\,KB dual-port block RAM. The entire SoC is clocked from the DE1-SoC’s 
+50 MHz on-board oscillator.
 
 Keeping the design inside the FPGA has three consequences that shape the rest
 of this chapter. First, there is no AXI bridge, no Linux boot, and no HPS
@@ -24,8 +24,8 @@ memory management to reason about, so cycle counts taken on the PicoRV32 core
 are directly comparable with cycle counts taken on the accelerator. Second,
 the problem sizes are bounded by on-chip capacity rather than by external
 DRAM bandwidth, which removes one variable from the comparison at the cost of
-limiting absolute problem size. Third, the software and hardware paths share
-the same memory, which makes the dual-port arrangement described in
+limiting absolute problem size. Third, the CPU and accelerator share the same on-chip memory,
+which makes the dual-port arrangement described in
 Section~\ref{sec:memory-arch} the central architectural decision of the
 platform.
 
@@ -100,7 +100,7 @@ synthesis numbers are pending completion of the Quartus timing closure study.
   \label{tab:fpga-resources}
 \end{table}
 
-Two resource classes are load-bearing for this design. The M10K blocks each
+Two resource classes are particularly important for this design. The M10K blocks each
 provide 10\,Kbits (roughly 1.25\,KB) of configurable on-chip
 memory~\citep{intel_m10k}. In true-dual-port mode with 32-bit-wide ports,
 each M10K holds 256 words, so the 64\,KB shared BRAM needs around 16 M10Ks
@@ -219,17 +219,16 @@ for quick reference.
     \node[region, fill=green!12]  (gpio) at (0, 0.9) {GPIO \\ LEDs, switches, 7-seg};
     \node[region, fill=purple!12] (uart) at (0,-0.3) {UART \\ \texttt{simpleuart}};
 
-    \node[addr] at (-3.0, 3.85) {0x0000\_0000};
-    \node[addr] at (-3.0, 2.75) {0x0000\_FFFF};
-    \node[addr] at (-3.0, 2.65) {0x1000\_0000};
-    \node[addr] at (-3.0, 1.55) {0x1000\_00FF};
-    \node[addr] at (-3.0, 1.45) {0x2000\_0000};
-    \node[addr] at (-3.0, 0.35) {0x2000\_000F};
-    \node[addr] at (-3.0, 0.25) {0x2000\_0100};
-    \node[addr] at (-3.0,-0.85) {0x2000\_01FF};
+    \node[addr] at (-3.0, 3.65) {0x0000\_0000};
+    \node[addr] at (-3.0, 2.9) {0x0000\_FFFF};
+    \node[addr] at (-3.0, 2.45) {0x1000\_0000};
+    \node[addr] at (-3.0, 1.75) {0x1000\_00FF};
+    \node[addr] at (-3.0, 1.27) {0x2000\_0000};
+    \node[addr] at (-3.0, 0.55) {0x2000\_000F};
+    \node[addr] at (-3.0, 0.1) {0x2000\_0100};
+    \node[addr] at (-3.0,-0.70) {0x2000\_01FF};
   \end{tikzpicture}
   \caption{System memory map as a vertical address strip. Each region
-           occupies a distinct high-order address decode so that routing
            inside the interconnect is a simple comparison on the top byte
            of the address.}
   \label{fig:memory-map}
@@ -247,14 +246,13 @@ bare-metal firmware. Table~\ref{tab:mmio-regs} lists the register set.
 \begin{table}[htbp]
   \centering
   \small
-  \begin{tabular}{llp{6.2cm}}
+  \begin{tabular}{llp{10cm}}
   \toprule
   Offset & Name & Description \\
   \midrule
   \texttt{0x00} & \texttt{CTRL} &
-    Control register: bit 0 = \texttt{start} (self-clearing pulse),
-    bit 1 = \texttt{clear\_done}, bit 2 = \texttt{irq\_en}
-    (reserved; polling used), bit 3 = \texttt{relu\_en},
+    Control register: bit 0 = \texttt{start},
+    bit 1 = \texttt{clear\_done}, bit 2 = \texttt{irq\_en}, bit 3 = \texttt{relu\_en},
     bit 4 = \texttt{int8\_mode} \\[4pt]
   \texttt{0x04} & \texttt{STATUS} &
     Status register: bit 0 = \texttt{busy}, bit 1 = \texttt{done} \\[4pt]
@@ -275,12 +273,6 @@ bare-metal firmware. Table~\ref{tab:mmio-regs} lists the register set.
   \label{tab:mmio-regs}
 \end{table}
 
-The \texttt{start} bit behaves as a one-cycle pulse: the CPU writes a 1, the
-accelerator captures it, and the bit self-clears so the CPU never has to
-clear it explicitly. \texttt{STATUS.done} is set when the last output row has
-been written back and remains high until the CPU acknowledges it by writing
-\texttt{CTRL.clear\_done}. The interrupt-enable bit exists in the hardware
-but is currently unused; the firmware polls \texttt{STATUS} instead.
 
 \section{System Operation}
 
@@ -307,15 +299,15 @@ The CPU clears the flag and proceeds to read $C$.
     \node[lane, fill=orange!5] (acchdr) at ( 3.2, 6.0) {\textbf{Accelerator}};
 
     \node[cpubox] (s1) at (-3.2, 5.0) {1. Stage CSR, $B$ in BRAM};
-    \node[cpubox] (s2) at (-3.2, 4.1) {2. Write MMIO config registers};
+    \node[cpubox] (s2) at (-3.2, 4.1) {2. Set MMIO config registers};
     \node[cpubox] (s3) at (-3.2, 3.2) {3. Pulse \texttt{CTRL.start}};
-    \node[cpubox] (s4) at (-3.2, 2.3) {4. Poll \texttt{STATUS.done}};
-    \node[cpubox] (s5) at (-3.2, 0.5) {7. Write \texttt{CTRL.clear\_done}};
-    \node[cpubox] (s6) at (-3.2,-0.4) {8. Read output matrix $C$};
+    \node[cpubox] (s4) at (-3.2, 2.3) {6. Poll \texttt{STATUS.done}};
+    \node[cpubox] (s5) at (-3.2, 1.3) {7. Write \texttt{CTRL.clear\_done}};
+    \node[cpubox] (s6) at (-3.2, 0.3) {8. Read output matrix $C$};
 
-    \node[accbox] (a1) at ( 3.2, 3.2) {5. Compute $C = A \times B$};
+    \node[accbox] (a1) at ( 3.2, 3.2) {4. Compute $C = A \times B$};
     \node[accbox] (a2) at ( 3.2, 2.3) {\quad\,\,tile over $N$, stream $A$};
-    \node[accbox] (a3) at ( 3.2, 1.4) {6. Raise \texttt{STATUS.done}};
+    \node[accbox] (a3) at ( 3.2, 1.4) {5. Raise \texttt{STATUS.done}};
 
     \draw[arr] (s3.east) -- node[above, font=\scriptsize]{\texttt{start}} (a1.west);
     \draw[arr] (a3.west) -- node[above, font=\scriptsize]{\texttt{done}}  (s4.east);
@@ -366,11 +358,11 @@ firmware with no OS, no DMA engine, and no driver stack. Register writes and
 a polling loop are enough, which is why the interface is intentionally
 small.
 
-\textbf{Dense-dimension tiling with $TN = 8$.} The accelerator exploits
-parallelism across output columns in fixed-width tiles. Eight was chosen to
-provide meaningful parallelism (eight simultaneous MACs) without exceeding
-the Cyclone~V DSP and BRAM routing limits at 50\,MHz. Chapter~\ref{ch:design}
-justifies this choice against the roofline model.
+\textbf{Tile-width constraint.} The available DSP, BRAM, and routing budget on
+ the Cyclone~V limits how wide the accelerator can be made while still meeting
+ timing at 50\,MHz. In the implemented design this leads to a tile width of $T_N = 8$,
+  which provides useful parallelism across the dense-output dimension without overextending
+  the platform resources. Chapter~\ref{ch:design} justifies this choice in detail.
 
 \textbf{Reproducible cycle-accurate benchmarking.} The firmware benchmark
 suite is deterministic (fixed PRNG seeds), self-verifying (element-by-element
