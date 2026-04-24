@@ -13,11 +13,7 @@ constraints they exposed.
 
 The accelerator has three jobs: walk the CSR structure of matrix $A$, stream
 row segments of matrix $B$ into a local buffer, and accumulate products into
-a tile of the output matrix $C$. Everything else in the design follows from
-that pattern.
-
-Rather than build one monolithic pipeline, the accelerator splits into two
-co-operating modules:
+a tile of the output matrix $C$. It splits into two co-operating modules:
 
 \begin{itemize}
   \item \texttt{accel\_ctrl}: a finite state machine that walks the CSR
@@ -34,9 +30,6 @@ reaches memory through Port~B of the dual-port BRAM, which returns one
 32-bit word per cycle with one cycle of registered read latency. Because
 that latency is fixed, every RAM access is scheduled deterministically and
 no stall/ready handshake is needed.
-
-The remaining sections look at each piece in turn, starting with the
-datapath.
 
 \section{Baseline Datapath}
 
@@ -139,10 +132,6 @@ single clock:
   \qquad c = 0, 1, \ldots, TN{-}1.
 \]
 
-That expression shows where the parallelism comes from: a single nonzero in
-$A$ meets an entire row segment of $B$, so one issue cycle produces $TN$
-output updates. The parallelism lies along the dense-output dimension, which
-is regular, rather than along the sparse dimension, which is not.
 Figure~\ref{fig:tile-illustration} shows the tile column inside $C$ that
 this corresponds to.
 
@@ -196,8 +185,7 @@ this corresponds to.
 Once every row has been visited for the current tile column, the datapath
 walks \texttt{C\_Tile} row by row and writes each entry back to shared RAM.
 If \texttt{CTRL.relu\_en} is set, an element-wise $\max(0, x)$ is applied
-on the writeback path, so the accelerator can serve directly as the
-fully-connected layer of a neural-network inference pipeline.
+on the writeback path.
 
 \section{Control FSM}
 \label{sec:fsm}
@@ -261,15 +249,8 @@ states, and Figure~\ref{fig:accel-fsm} shows the transitions.
   \label{fig:accel-fsm}
 \end{figure}
 
-In plain terms, the outer loop walks tile columns, the middle loop walks
-rows, and the inner loop walks the nonzeros of each row. For every nonzero
-the FSM fetches the column index and the value, fills \texttt{B\_Seg}, fires
-one MAC cycle, and moves on. When the last row finishes, the whole tile is
-written back and the column offset advances by $TN$; when the last tile
-column finishes, the accelerator raises \texttt{STATUS.done}. The sub-phases
-inside \texttt{ROW\_LOAD} and \texttt{NZ\_FETCH} exist only to absorb the
-one-cycle BRAM read latency: the address is driven on one cycle and the
-data is consumed on the next.
+The FSM implements a tile-column outer loop, a row loop, and a nonzero
+loop, with explicit sub-phases to absorb the one-cycle BRAM latency.
 
 A first-order cycle model per tile column is
 \[
@@ -317,35 +298,26 @@ Table~\ref{tab:tn-tradeoffs} lists the alternatives.
   \label{tab:tn-tradeoffs}
 \end{table}
 
-At $TN = 1$ there is no parallelism at all. At $TN = 4$ the reuse of each
-fetched $B$ segment is halved. At $TN = 16$ or $32$ the C-tile grows past a
-thousand registers, eight or more extra DSP lanes have to be routed
-alongside the CPU, BRAM, UART and GPIO already in the fabric, and trial
-builds stopped closing timing at 50\,MHz. $TN = 8$ is the largest width
-that met timing in those trials. It also fits eight DSP blocks cleanly,
-keeps \texttt{C\_Tile} at 512 registers, and covers the smallest benchmark
-case ($N = 8$) in a single tile column so no case is penalised by tiling
-overhead.
+$TN = 8$ was selected as the largest width that met 50\,MHz timing in
+trial builds while keeping the \texttt{C\_Tile} array and DSP usage
+manageable. It also covers the $N = 8$ benchmark cases in a single tile
+column.
 
 \section{Algorithmic Decomposition: Row-Wise CSR Traversal}
 
-This section explains why the accelerator walks $A$ row by row rather than
-using an outer-product or intersection-based approach.
+The accelerator uses row-wise CSR traversal because it minimises the
+control and storage structures needed on a small FPGA. More complex
+outer-product or intersection-based approaches, such as those used by
+OuterSPACE~\citep{outerspace2018} or ExTensor~\citep{extensor2019}, can
+improve throughput for some sparse workloads, but they require merge
+networks, multi-port accumulation, or intersection hardware. These
+structures were not appropriate for the resource budget and verification
+scope of this SoC.
 
-The datapath and FSM both assume a specific traversal order: rows of $A$
-visited one at a time, with tiling only across the dense-output dimension.
-The alternative was an outer-product decomposition (as in
-OuterSPACE~\citep{outerspace2018}) or intersection-based skipping (as in
-ExTensor~\citep{extensor2019}). Both can deliver higher throughput on
-particular sparsity patterns, but both need index-merge networks, multi-port
-accumulation, and in some cases content-addressable memory. None of that
-fits inside the SoC budget of this project.
-
-Row-wise CSR keeps three things simple. The FSM only has to track one row
-pointer at a time. The BRAM Port~B access pattern stays mostly sequential
-with no bank conflicts. And \texttt{C\_Tile} writeback is a straight sweep
-with no merge logic. These properties are what allowed the design to be
-verified by hand in simulation before synthesis.
+Row-wise CSR allows the controller to track one row pointer at a time,
+stream most CSR accesses sequentially through BRAM Port~B, and write back
+\texttt{C\_Tile} with a simple row sweep. This is the traversal order used
+in the implemented FSM.
 
 \section{Memory Optimisation: the B-Segment Bottleneck}
 \label{sec:bseg}
@@ -367,12 +339,10 @@ introduced in Section~\ref{sec:roofline}, and any optimisation that does
 not shrink the $B$-fill term is capped at a small fraction of the ideal
 speedup.
 
-Breaking the per-nonzero cycle count down makes this explicit. In the
-baseline, each nonzero takes about ten cycles of useful work: eight to fill
-\texttt{B\_Seg}, plus one cycle of registered read latency on the first
-word, plus one MAC cycle. Of those ten, the eight fill cycles are entirely
-memory-bound. The next section looks at what can be done on the arithmetic
-side; Section~\ref{sec:int8} then addresses the memory side directly.
+In the baseline, each nonzero takes about ten cycles of useful work:
+eight to fill \texttt{B\_Seg}, plus one cycle of registered read latency
+on the first word, plus one MAC cycle. Of those ten, the eight fill cycles
+are entirely memory-bound.
 
 \section{DSP-Oriented Parallel MAC Enhancement}
 \label{sec:dsp}
@@ -384,9 +354,8 @@ Each DSP block on Cyclone~V provides an 18$\times$18-bit signed multiplier
 with a dedicated accumulator register~\citep{intel_dsp_blocks}. Quartus
 will map an RTL multiplier onto a DSP block, but only when the operand
 widths and the accumulator structure match what the block expects. In the
-baseline the eight MACs are written as generic 32-bit multiplications, and
-depending on register fan-out and routing pressure some lanes were inferred
-in ALM logic rather than in DSP blocks.
+baseline the eight MACs are written as generic 32-bit multiplications,
+which Quartus may not map onto DSP blocks as predictably.
 
 The DSP MAC stage rewrites each lane in the registered-feedback form that
 Quartus recognises:
@@ -406,11 +375,8 @@ which is the purpose of the INT8 packed mode in Section~\ref{sec:int8}.
 \label{sec:int8}
 
 This section describes what changes in the datapath when INT8 mode is
-enabled. The goal here is implementation detail; the broader argument for
-why INT8 was the right choice for this workload appears in
-Chapter~\ref{ch:motivation}.
-
-When \texttt{CTRL.int8\_mode} is set, three specific things change:
+enabled. When \texttt{CTRL.int8\_mode} is set, three specific things
+change:
 
 \begin{enumerate}
   \item \textbf{The CSR \texttt{values} array is packed as four INT8 per
@@ -481,11 +447,8 @@ for one 32-bit read.
   \label{fig:int8-extract}
 \end{figure}
 
-Accumulation and the writeback path are unchanged. Every entry of
-\texttt{C\_Tile} stays INT32 throughout the computation, the multiplier
-still sees a full-precision 32-bit operand (the upper 24 bits are just the
-sign), and the output matrix $C$ is still written as 32-bit words. The
-whole change touches only the memory-facing side of the datapath.
+Accumulation and writeback remain INT32, so the change is confined to the
+memory-facing unpack/sign-extension path.
 
 \section{Physical Design Tradeoffs}
 
@@ -506,15 +469,13 @@ generates CSR addresses and drives eight parallel writes into
 \texttt{C\_Tile}. After the INT8 packing datapath was introduced, one
 synthesis run failed to close timing under the default balanced
 optimisation mode and required the Quartus fitter to be switched to
-performance-oriented optimisation. That incident is the concrete source
-of the reflection in Chapter~\ref{ch:reflection} on the hidden costs of
-parallelism on FPGAs.
+performance-oriented optimisation.
 
 Table~\ref{tab:design-evolution} summarises what changed across the three
 stages. The MAC width, accumulator precision, and output format stay the
 same (8 lanes, INT32, INT32). The DSP mapping and the per-nonzero $B$-fill
 cost are the only things that vary, and those two knobs account for the
-cycle reduction from baseline to final INT8 build.1
+cycle reduction from baseline to final INT8 build.
 
 \begin{table}[htbp]
   \centering
@@ -533,6 +494,6 @@ cycle reduction from baseline to final INT8 build.1
   \end{tabular}
   \caption{Architectural attributes across the three design stages. Measured
            speedups for each stage are reported in
-           Chapter~\ref{ch:reflection}.}
+           Chapter~\ref{ch:results}.}
   \label{tab:design-evolution}
 \end{table}
