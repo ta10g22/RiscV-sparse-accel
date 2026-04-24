@@ -1,4 +1,5 @@
 \chapter{Background and Literature Review}
+\label{ch:motivation}
 
 There is a vast body of algorithms for Sparse Matrix Multiplication (SpMM),
 as well as many different storage formats for converting sparse matrices into
@@ -500,10 +501,6 @@ accelerator:
         output, so the cost of the indirect CSR lookup is spread over
         all $N$ output columns.
 \end{enumerate}
-The control FSM described in Chapter~\ref{ch:design} implements exactly
-this loop structure, with the three CSR arrays feeding the address
-generation logic and the row of $B$ forming the operand tile that is
-multiplied against each nonzero scalar.
 
 \section{Prior Work on SpMM Accelerators}
 

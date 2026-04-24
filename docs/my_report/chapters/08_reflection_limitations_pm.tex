@@ -43,53 +43,62 @@ would have prevented the issue entirely.
 
 A second lesson came from increasing routing pressure as parallel logic was
 added. Quartus reported higher congestion around the C-tile register array
-and the wide MAC buses, and one timing closure attempt failed before synthesis
-settings were adjusted. Parallelism in FPGA designs carries costs beyond
-logic area: routing, placement, and timing closure are interdependent, and a
-design that fits comfortably in ALMs can still fail to close timing if the
-wiring density in a local region exceeds the device's capacity. This tension
-does not appear in RTL simulation and cannot be resolved by functional
-correctness alone.
-
-\section{Current Limitations}
-
-Several limitations constrain the scope of the conclusions drawn in this
-report. Full Quartus post-fit timing and resource reports for all three
-variants were still being finalised at the time of writing, so the
-figures in Table~\ref{tab:quartus-final} are estimates and should not be
-treated as definitive until the final revision. The reported accelerator
-cycle counts are end-to-end and include the software orchestration
-overhead (register writes and the polling loop), which for the smallest
-benchmark cases is a non-trivial fraction of the total and cannot be
-cleanly separated from hardware execution time without adding an internal
-cycle-counter register to the accelerator. The 64\,KB on-chip RAM bounds
-the benchmark matrices to $M = K \leq 64$ and moderate $N$, whereas real
-GNN workloads operate at dimensions several orders of magnitude larger
-and require an off-chip memory system to be meaningful. Finally, no
-power measurement was performed: the DE1-SoC board does not expose a
-direct rail-level measurement interface, and external instrumentation
-was outside the scope of the project.
+and the wide MAC buses, and timing closure failed after the INT8 packing
+datapath was introduced until the fitter was switched from the default
+balanced optimisation mode to performance-oriented optimisation.
+Parallelism in FPGA designs carries costs beyond logic area: routing,
+placement, and timing closure are interdependent, and a design that fits
+comfortably in ALMs can still fail to close timing if the wiring density in
+a local region exceeds the device's capacity. This tension does not appear
+in RTL simulation and cannot be resolved by functional correctness alone.
 
 \section{Project Management}
 
-The project ran across two semesters. Semester~1 covered literature review,
-platform selection, and the baseline RTL; Semester~2 covered the three
-optimisation stages, the firmware benchmark harness, hardware deployment, and
-report writing. The Gantt charts in Appendix~\ref{app:gantt} record the
-original plan.
+The project ran across two semesters. Semester~1 covered the literature
+review, the design and planning phases, RTL development and integration,
+and the initial FPGA deployment. Semester~2 covered the two remaining
+optimisation stages (DSP-oriented MAC and INT8 quantisation), the hardware
+benchmarking campaign, and report writing. The Gantt charts in
+Appendix~\ref{app:gantt} record both the original plan and the way the
+work actually unfolded.
 
-The schedule pressure in Semester~2 arose almost entirely during FPGA
-integration: combining PicoRV32, BRAM port configuration, UART, and
-accelerator MMIO in a single synthesisable design took longer than planned,
-in part because of the stale-artefact bug described above and in part because
-timing closure required more synthesis experimentation than expected. Keeping
-a fully working, deployable design at every stage, rather than accumulating
-incomplete features before integration, was the practice that kept the
-overall schedule recoverable.
+Semester~1 schedule pressure arose almost entirely from the implementation
+and integration phases, which ultimately ran roughly two weeks longer than
+the planned allocation, as noted in Appendix~\ref{app:gantt}. Three
+factors contributed. First, RTL verification exposed a combination of
+syntax errors and functional defects in the early testbenches, each of
+which required targeted debugging before the unit suites would pass.
+Second, the SoC was originally specified with an interrupt-driven
+completion path from the accelerator to the CPU, but the unforeseen
+complexity of integrating interrupt handling with the PicoRV32 exception
+model led to the mechanism being descoped in favour of a simple polling
+loop on the status register. Third, the plan allocated only a four-day
+slack window (22--25 December) for unforeseen errors, which was consumed
+almost immediately once the integration problems began to appear and
+proved far too short for a project of this scale.
 
-The overall lesson is that hardware project timelines are dominated by
-integration and debug, not by initial design. Treating build-flow discipline
-(artefact management, synthesis scripts, timing closure) as first-class
-engineering work from the start, rather than as polish at the end, would have
-eliminated most of the schedule pressure experienced in the second half of
-the project.
+Semester~2 pressure originated mainly from the benchmarking phase. The
+UART peripheral bundled with the PicoRV32 reference design did not
+support the cycle-accurate timing readouts required by the measurement
+methodology in Chapter~\ref{ch:methodology}, which blocked progress on
+the benchmark harness until a replacement was identified. Adopting the
+open-source \texttt{simpleuart} core resolved this and removed the
+largest single source of benchmarking delay. The stale firmware image
+bug discussed in the preceding section compounded the pressure by
+masquerading as functional failure for several days before the root
+cause was understood. Finally, after the INT8 packing datapath was
+added, Quartus routing failed to close timing under the default balanced
+optimisation mode; switching the fitter to performance-oriented
+optimisation closed timing but added roughly twenty minutes to every
+full synthesis run, which measurably lengthened the remaining debug
+iterations. Preserving a fully working, deployable design at the end of
+every stage, rather than accumulating partially integrated features,
+was the practice that kept the overall schedule recoverable despite
+these setbacks.
+
+The overarching lesson is that hardware project timelines are dominated
+by integration and debug rather than initial design. Treating build-flow
+discipline (artefact management, synthesis scripts, timing closure) as
+first-class engineering work from the outset, rather than as polish at
+the end, would have eliminated most of the schedule pressure experienced
+in the second half of the project.

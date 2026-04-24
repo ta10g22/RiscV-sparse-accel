@@ -122,7 +122,7 @@ $B[j, c_0:c_0{+}TN]$ before the MAC fires.
 
 \textbf{\texttt{C\_Tile}} is an $M_{\mathrm{max}} \times TN$ array of 32-bit
 signed accumulators that holds the partial sums for every row of $C$ within
-the current tile column $[c_0, c_0{+}TN)$. It is implemented as fabric
+the current tile column $[c_0, c_0{+}TN]$. It is implemented as fabric
 registers (around 256 ALMs on Cyclone~V), not BRAM, so every entry can be
 read and updated on the same cycle. Keeping it flat, rather than as a set
 of per-row registers, matters because nonzeros from different rows often
@@ -392,14 +392,14 @@ Quartus recognises:
 \[
   \texttt{C\_Tile}[i][c] \;\leftarrow\; \texttt{C\_Tile}[i][c] + a \cdot B[c],
 \]
-with 32-bit signed operands and a registered accumulator. With this form
-all eight lanes map onto dedicated DSP multiply/accumulator blocks, each
-MAC completes in one cycle, and the ALM usage of the arithmetic core drops.
-
-End-to-end cycles across the benchmark suite improved by roughly
-$1.3\times$. The modest size of the gain is informative: the baseline was
-already not compute-bound, so the headline speedup has to come from the
-memory side. That is what Section~\ref{sec:int8} does.
+with 32-bit signed operands and a registered accumulator. With this form,
+the MAC lanes are designed to map more predictably onto dedicated DSP
+multiply-accumulate resources, reducing the amount of arithmetic
+implemented in ALM logic. However, this stage does not change the number
+of $B$-segment reads per nonzero, so it cannot remove the dominant
+memory-side bottleneck identified in Section~\ref{sec:bseg}. The larger
+performance opportunity therefore comes from reducing the $B$-fill cost,
+which is the purpose of the INT8 packed mode in Section~\ref{sec:int8}.
 
 \section{INT8 Mode at the Datapath Level}
 \label{sec:int8}
@@ -502,16 +502,18 @@ The target clock is 50\,MHz, a comfortable 20\,ns period. Cyclone~V designs
 with DSP-mapped multipliers routinely reach 100--200\,MHz, so the multiplier
 is not the critical path. The critical path is the combinatorial logic that
 generates CSR addresses and drives eight parallel writes into
-\texttt{C\_Tile}. One synthesis run during the DSP stage failed to close
-timing until routing-affinity settings were adjusted. That incident is the
-concrete source of the reflection in Chapter~\ref{ch:reflection} on the
-hidden costs of parallelism on FPGAs.
+\texttt{C\_Tile}. After the INT8 packing datapath was introduced, one
+synthesis run failed to close timing under the default balanced
+optimisation mode and required the Quartus fitter to be switched to
+performance-oriented optimisation. That incident is the concrete source
+of the reflection in Chapter~\ref{ch:reflection} on the hidden costs of
+parallelism on FPGAs.
 
 Table~\ref{tab:design-evolution} summarises what changed across the three
 stages. The MAC width, accumulator precision, and output format stay the
 same (8 lanes, INT32, INT32). The DSP mapping and the per-nonzero $B$-fill
 cost are the only things that vary, and those two knobs account for the
-cycle reduction from baseline to final INT8 build.
+cycle reduction from baseline to final INT8 build.1
 
 \begin{table}[htbp]
   \centering
