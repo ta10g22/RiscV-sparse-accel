@@ -33,9 +33,8 @@
                         {0.3in}
 }
 
-% Suppress "undefined reference" warnings from labels that live only in the
-% removed appendices or bibliography; these show as ?? in the output but do
-% not affect the prose the plagiarism check is looking at.
+% Appendix labels are reconstructed invisibly near the end of the document, so
+% references to removed appendix material do not appear as ?? in the output.
 \begin{document}
 \setbodymargins
 \pagenumbering{arabic}
@@ -49,6 +48,15 @@
 \input{chapters/05_firmware_software_control_flow}
 \input{chapters/08_reflection_limitations_pm}
 \input{chapters/09_conclusion}
+
+% Invisible appendix counters for references in the shortened copy. This keeps
+% the prose identical to the main report without adding appendix pages.
+\appendix
+\refstepcounter{chapter}\label{app:spmm-background}
+\setcounter{section}{1}\refstepcounter{section}\label{app:csr-example}
+\setcounter{section}{3}\refstepcounter{section}\label{app:csr-pseudocode}
+\setcounter{section}{5}\refstepcounter{section}\label{app:quant-definition}
+\refstepcounter{chapter}\label{app:gantt}
 
 % ------------------------------------------------------------
 % Resolve citation numbers by reading the bibliography into a

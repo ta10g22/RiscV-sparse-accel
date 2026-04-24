@@ -1,3 +1,4 @@
+% !TEX root = ../main.tex
 \chapter{Background and Literature Review}
 \label{ch:motivation}
 
@@ -71,49 +72,18 @@ orders of magnitude.
   \label{fig:sparsity-levels}
 \end{figure}
 
-\vspace{2cm} % Adds 2 centimeters of vertical space
-
-\subsection{Graph Neural Networks}
-
-Graph neural networks (GNNs) are an important and growing class of
-workloads in which SpMM appears as a first-class primitive. Each layer of
-a message-passing GNN such as GraphSAGE~\citep{graphsage2017} or a Graph
-Attention Network~\citep{gat2018} computes
-\[
-  H^{(l+1)} = \sigma\!\left( \hat{A} \, H^{(l)} \, W^{(l)} \right),
-\]
-where $\hat{A}$ is the normalised sparse adjacency matrix of the input
-graph and $H^{(l)}$ is the dense feature matrix. The product
-$\hat{A} \, H^{(l)}$ is a sparse--dense multiply that dominates inference
-time on large graphs.
-
-\subsection{Recommender Systems and Sparse Embedding Lookup}
-
-Industrial recommender systems such as the YouTube recommendation
-engine~\citep{covington2016youtube} maintain embedding tables with hundreds
-of millions of rows. The forward pass reduces to a row-gather SpMM on the
-interaction matrix, where sparse interaction patterns meet dense embedding
-rows.
-
-\subsection{Scientific Computing}
-
-In finite-element and finite-difference simulation, sparse matrices arise
-from the discretisation of differential operators on computational meshes.
-SpMM appears in multivector iterative solvers such as block GMRES and
-Lanczos methods, where each iteration applies the sparse system matrix to
-a block of dense vectors.
-
-\subsection{Compressed and Pruned Neural Networks}
-
-Weight pruning removes less-significant connections from a dense neural
-network, turning weight matrices into sparse ones. Han et
-al.~\citep{han2016eie} showed that networks pruned to 80--90\% sparsity
-can be executed in compressed form with large energy and storage savings;
-combined with INT8 quantisation, as in the EIE design, SpMM on the
-compressed weights becomes the dominant kernel. The same principle applies
-to sparse-attention transformers.
+These sparsity patterns appear in several domains, but the hardware problem is
+similar in each case. GNN layers multiply a sparse adjacency matrix by dense
+feature rows~\citep{graphsage2017, gat2018}; recommender systems apply sparse
+user--item interaction matrices to dense embedding tables~\citep{covington2016youtube};
+scientific solvers repeatedly apply sparse discretisation matrices to blocks of
+vectors; and pruned neural networks execute sparse weight matrices after most
+connections have been removed~\citep{han2016eie}. The common feature is that
+the useful arithmetic is tied to the nonzero structure of $A$, while the dense
+operand $B$ still has to be streamed and accumulated efficiently.
 
 \section{Why Sparsity Changes the Design Problem}
+\label{sec:sparsity-design-problem}
 
 \subsection{The FLOP-to-Bandwidth Mismatch}
 
@@ -250,88 +220,15 @@ acceleration.
 
 \subsection{Why CSR Was Chosen}
 
-Figure~\ref{fig:csr-layout} shows the CSR encoding of a small $4 \times 4$
-sparse matrix. The three arrays \texttt{rowptr}, \texttt{colidx}, and
-\texttt{values} together record exactly which nonzeros exist and where, with
-no storage spent on the zero entries.
-
-\begin{figure}[htbp]
-  \centering
-  \begin{tikzpicture}[
-      every node/.style={font=\small},
-      mcell/.style={draw, minimum size=7mm, inner sep=0pt, anchor=center},
-      acell/.style={draw, minimum width=7mm, minimum height=6mm, inner sep=0pt,
-                    font=\scriptsize\ttfamily},
-    ]
-    % --- Matrix A ---
-    \node[font=\small] at (-0.2,3) {Matrix $A$};
-    \matrix (A) [matrix of nodes,
-                 nodes={mcell},
-                 column sep=-\pgflinewidth,
-                 row sep=-\pgflinewidth,
-                 nodes in empty cells] at (0,1) {
-      3 & 0 & 0 & 7 \\
-      0 & 0 & 2 & 0 \\
-      0 & 5 & 0 & 0 \\
-      0 & 0 & 0 & 1 \\
-    };
-
-    % --- rowptr ---
-    \node[font=\small, anchor=west] at (3.6,2.5) {\texttt{rowptr}};
-    \foreach \val [count=\i from 0] in {0,2,3,4,5} {
-      \node[acell, fill=blue!10] (rp\i) at (4.2+\i*0.75, 2.05) {\val};
-    }
-
-    % --- colidx ---
-    \node[font=\small, anchor=west] at (3.6,1.3) {\texttt{colidx}};
-    \foreach \val [count=\i from 0] in {0,3,2,1,3} {
-      \node[acell, fill=green!12] (ci\i) at (4.2+\i*0.75, 0.85) {\val};
-    }
-
-    % --- values ---
-    \node[font=\small, anchor=west] at (3.6,0.1) {\texttt{values}};
-    \foreach \val [count=\i from 0] in {3,7,2,5,1} {
-      \node[acell, fill=orange!15] (vl\i) at (4.2+\i*0.75, -0.35) {\val};
-    }
-
-    % --- annotations ---
-    \node[font=\scriptsize, anchor=north, text=black!60] at (5.7,1.85) {
-      indices into \texttt{colidx} / \texttt{values}
-    };
-
-    \node[font=\scriptsize, anchor=north, text=black!60] at (5.7,0.63) {
-      column of each nonzero
-    };
-
-    \node[font=\scriptsize, anchor=north, text=black!60] at (5.7,-0.6) {
-      nonzero values
-    };
-  \end{tikzpicture}
-  \caption{CSR encoding of a $4 \times 4$ sparse matrix with five nonzeros.
-           \texttt{rowptr}[i] is the index of the first nonzero in row~$i$;
-           row~$i$ owns entries \texttt{rowptr}[i] through
-           \texttt{rowptr}[i{+}1]${-}1$ in both \texttt{colidx} and
-           \texttt{values}. \texttt{rowptr}[M]${=}$NNZ by convention.}
-  \label{fig:csr-layout}
-\end{figure}
-
-CSR was selected for this project because it maps directly onto the natural
-execution order of row-wise SpMM. Gustavson's algorithm for sparse matrix
-multiplication~\citep{gustavson1978} established that row-wise traversal of CSR
-is asymptotically optimal for output-row-oriented computation, and that the row
-pointer array provides $O(1)$ access to the start of each row's nonzero
-sequence. Bell and Garland~\citep{bell_garland2009} demonstrated that CSR
-remains the most widely supported format for both CPU and GPU SpMV/SpMM
-implementations precisely because its memory layout matches the natural iteration
-over output rows.
-
-For a hardware FSM, the CSR structure offers a critical advantage: the bounds of
-each row's nonzero segment are available with a single pointer read, and the
-entire nonzero segment can be streamed sequentially from memory. There is no need
-for global index sorting, block alignment padding, or two-dimensional address
-translation. The firmware preparation cost is also low: generating CSR from a
-list of nonzeros requires a single pass to count per-row nonzeros and a second
-pass to write values and indices.
+CSR was selected because it matches the row-wise execution order used by both
+the firmware baseline and the accelerator. The \texttt{rowptr} array gives
+constant-time access to the start and end of each output row, while
+\texttt{colidx} and \texttt{values} can then be streamed sequentially. This is
+the layout assumed by Gustavson-style sparse multiplication~\citep{gustavson1978}
+and remains the default CPU/GPU representation for row-oriented SpMV and
+SpMM~\citep{bell_garland2009}. For a small hardware FSM it avoids COO sorting,
+ELL padding, BSR block addressing, and column-oriented output reconstruction.
+A worked CSR encoding example is provided in Appendix~\ref{app:csr-example}.
 
 \section{SpMM Execution with CSR}
 \label{sec:csr-spmm-execution}
@@ -357,84 +254,8 @@ zeros from the loop entirely: only the nonzero entries of each row of $A$
 are enumerated, and each one contributes a scaled copy of a single row of
 $B$ to the corresponding row of $C$.
 
-\subsection{A Concrete Example}
-
-Figure~\ref{fig:spmm-dense-example} shows a $4 \times 4$ sparse $A$ matrix,
-multiplied by a $4 \times 3$ dense $B$ to produce a $4 \times 3$ output
-$C$. $A$ has five nonzeros, so only five sparse--dense interactions occur
-in the entire multiply. Each one takes a single nonzero of $A$ and a
-single row of $B$ (the row whose index equals the column index of the
-nonzero) and produces a scaled row that is accumulated into the matching
-row of $C$. The highlighted entry $A[0, 3] = 7$ picks row 3 of $B$,
-multiplies it by 7, and contributes $(70, 77, 84)$ to row 0 of $C$;
-$A[0, 0] = 3$ contributes a further $(3, 6, 9)$ from row 0 of $B$, giving
-the final $C[0, :] = (73, 83, 93)$.
-
-\begin{figure}[htbp]
-  \centering
-  \begin{tikzpicture}[
-      every node/.style={font=\small},
-      mcell/.style={draw, minimum size=7mm, inner sep=0pt, anchor=center,
-                    font=\small},
-      nz/.style={fill=green!15},
-      nzpick/.style={fill=green!40},
-      rowhi/.style={fill=blue!15},
-    ]
-    \node[font=\small\bfseries] at (0, 1.85) {$A$ ($4 \times 4$ sparse)};
-    \node[font=\small\bfseries] at (4.3, 1.85) {$B$ ($4 \times 3$ dense)};
-    \node[font=\small\bfseries] at (8.3, 1.85) {$C = AB$};
-
-    \matrix (A) [matrix of nodes,
-                 nodes={mcell},
-                 column sep=-\pgflinewidth,
-                 row sep=-\pgflinewidth,
-                 nodes in empty cells] at (0, 0) {
-      |[nz]| 3 & 0 & 0 & |[nzpick]| 7 \\
-      0 & 0 & |[nz]| 2 & 0 \\
-      0 & |[nz]| 5 & 0 & 0 \\
-      0 & 0 & 0 & |[nz]| 1 \\
-    };
-
-    \node[font=\large] at (2.3, 0) {$\times$};
-
-    \matrix (B) [matrix of nodes,
-                 nodes={mcell},
-                 column sep=-\pgflinewidth,
-                 row sep=-\pgflinewidth] at (4.3, 0) {
-      1 & 2 & 3 \\
-      4 & 5 & 6 \\
-      7 & 8 & 9 \\
-      |[rowhi]| 10 & |[rowhi]| 11 & |[rowhi]| 12 \\
-    };
-
-    \node[font=\large] at (6.3, 0) {$=$};
-
-    \matrix (C) [matrix of nodes,
-                 nodes={mcell},
-                 column sep=-\pgflinewidth,
-                 row sep=-\pgflinewidth] at (8.3, 0) {
-      |[rowhi]| 73 & |[rowhi]| 83 & |[rowhi]| 93 \\
-      14 & 16 & 18 \\
-      20 & 25 & 30 \\
-      10 & 11 & 12 \\
-    };
-
-    \node[font=\scriptsize, text=black!70, align=center] at (4.3, -2.0)
-      {$A[0, 3] = 7$ picks row 3 of $B$ and contributes $7 \cdot B[3, :]$ to row 0 of $C$.};
-  \end{tikzpicture}
-  \caption{A small sparse--dense matrix multiply $C = AB$. Shaded cells of
-           $A$ are its five nonzero entries; the darker cell $A[0, 3] = 7$
-           is highlighted as a worked example. Each nonzero of $A$ scales
-           the row of $B$ whose index equals its column and accumulates
-           that scaled row into the matching row of $C$.}
-  \label{fig:spmm-dense-example}
-\end{figure}
-
-\subsection{Row-Wise CSR Execution}
-
-In CSR form, the nonzeros of $A$ are stored in row-major order as
-described in Section~2.3. The computation of $C = AB$ iterates over each
-output row and then over each nonzero in that row:
+In CSR form, the computation iterates over each output row and then over
+the nonzeros in that row:
 \begin{enumerate}
   \item For each output row $i = 0, 1, \ldots, M{-}1$, look up the row
         bounds $p_{\mathrm{start}} = \texttt{rowptr}[i]$ and
@@ -445,112 +266,47 @@ output row and then over each nonzero in that row:
         accumulate $C[i, :] \mathrel{+}= a \cdot B[j, :]$.
 \end{enumerate}
 The inner update is a scalar-times-vector operation across the $N$ output
-columns, so one nonzero of $A$ produces $N$ useful multiplies in parallel,
-and the sparse dimension $K$ never appears as a loop variable. The
-parallelism in the hardware comes from the dense dimension, where the
-work is regular, rather than the sparse dimension, where it is not.
+columns: each nonzero of $A$ scales one row of $B$ and accumulates that row
+into $C[i, :]$. This is why the accelerator parallelises across the dense
+dimension rather than across the sparse dimension. The control FSM only needs
+the three CSR arrays for address generation, while the MAC lanes see regular
+work over a contiguous segment of $B$. Full pseudocode and a worked numeric
+example are left to Appendix~\ref{app:csr-pseudocode}.
 
-Table~\ref{tab:spmm-walkthrough} traces the two iterations that compute
-row $i = 0$ of the example. The bounds $\texttt{rowptr}[0] = 0$ and
-$\texttt{rowptr}[1] = 2$ select two nonzeros from \texttt{colidx} and
-\texttt{values}. The first iteration uses $\texttt{values}[0] = 3$ and
-$\texttt{colidx}[0] = 0$ to fetch $B[0, :]$ and accumulate
-$3 \cdot B[0, :]$ into $C[0, :]$. The second iteration uses
-$\texttt{values}[1] = 7$ and $\texttt{colidx}[1] = 3$ to fetch $B[3, :]$
-and accumulate $7 \cdot B[3, :]$. The two partial updates sum to
-$C[0, :] = (73,\, 83,\, 93)$, agreeing with
-Figure~\ref{fig:spmm-dense-example}.
+\section{Prior Work on SpMM Accelerators}
+
+Table~\ref{tab:prior-work} summarises the accelerator work most relevant to
+this project.
 
 \begin{table}[htbp]
   \centering
   \small
   \setlength{\tabcolsep}{6pt}
-  \begin{tabular}{cccccc}
+  \begin{tabular}{p{3.0cm}p{2.8cm}p{7cm}}
     \toprule
-    $p$ & \texttt{values}[p] & \texttt{colidx}[p] & $B[j, :]$ &
-        $a \times B[j, :]$ & $C[0, :]$ after update \\
+    Work & Target & Relevance to this project \\
     \midrule
-    $0$ & $3$ & $0$ & $(1, 2, 3)$    & $(3, 6, 9)$    & $(3, 6, 9)$    \\
-    $1$ & $7$ & $3$ & $(10, 11, 12)$ & $(70, 77, 84)$ & $(73, 83, 93)$ \\
+    OuterSPACE~\citep{outerspace2018} & SpGEMM &
+      Outer-product sparse--sparse multiplication with dedicated accumulation. \\
+    SpArch~\citep{sparch2020} & SpGEMM merge phase &
+      Shows that sparse output merging can dominate when both inputs are sparse. \\
+    ExTensor~\citep{extensor2019} & Sparse tensor algebra &
+      Uses intersection hardware to skip absent operand pairs before multiplication. \\
+    SIGMA~\citep{sigma2020} & Sparse DNN training &
+      Reconfigures its reduction network to match unstructured sparse weights. \\
     \bottomrule
   \end{tabular}
-  \caption{Walk-through of the row-wise CSR execution for output row
-           $i = 0$ of Figure~\ref{fig:spmm-dense-example}. Each iteration
-           reads one nonzero of $A$ through the CSR arrays, fetches the
-           corresponding row of $B$, and accumulates the scalar-scaled
-           vector into $C[0, :]$.}
-  \label{tab:spmm-walkthrough}
+  \caption{Representative sparse-acceleration designs and their relationship to
+           this work.}
+  \label{tab:prior-work}
 \end{table}
 
-\subsection{Why This Maps Well to Hardware}
-
-The execution model has three properties that suit a small FPGA
-accelerator:
-\begin{enumerate}
-  \item \emph{Address generation from three arrays.} \texttt{rowptr}
-        supplies the loop bounds for each output row, \texttt{colidx}
-        supplies the row index of $B$ to fetch, and \texttt{values}
-        supplies the scalar multiplier. No global index sort, block
-        alignment, or two-dimensional address translation is required.
-  \item \emph{Data-parallel inner update.} The scalar-vector update maps
-        onto an array of $TN$ parallel MAC units, each handling one
-        column of the output tile, so the MAC array sees regular work
-        even when the outer traversal is irregular.
-  \item \emph{Amortised irregular cost.} Each operand fetched from
-        \texttt{colidx} and \texttt{values} drives $N$ multiplies in the
-        output, so the cost of the indirect CSR lookup is spread over
-        all $N$ output columns.
-\end{enumerate}
-
-\section{Prior Work on SpMM Accelerators}
-
-\subsection{OuterSPACE}
-
-OuterSPACE~\citep{outerspace2018} targets the SpGEMM (sparse--sparse matrix
-multiply) problem using an outer-product decomposition. Rather than
-traversing CSR rows serially, it computes partial products for each nonzero
-column of $A$ and accumulates them into a merge tree, achieving high
-throughput by parallelising across columns of $A$ and using dedicated
-on-chip accumulators.
-
-\subsection{SpArch}
-
-SpArch~\citep{sparch2020} also targets sparse--sparse computation, focusing
-on the merger phase that reduces partial products to a final output. It
-introduces a condenser that reorganises partial products to maximise
-row-merger bandwidth, and shows that the merger step, not the
-multiplication step, typically dominates sparse--sparse computation time.
-
-\subsection{ExTensor}
-
-ExTensor~\citep{extensor2019} generalises sparse computation to
-higher-order tensors and introduces intersection hardware that skips pairs
-of zero operands before they reach the multiplier array, avoiding the
-memory read entirely when a nonzero pair is absent. CSR provides a weaker
-form of this by construction: the column-index array only points to
-nonzero entries, and zero rows of $A$ produce no traversal steps at all.
-
-\subsection{SIGMA}
-
-SIGMA~\citep{sigma2020} targets the sparse-weight GEMM that arises during
-DNN training after unstructured pruning. It uses a flexible
-\textit{Forwarding Adder Network} (FAN) as a reduction tree whose
-connectivity is reconfigured at runtime to match the nonzero pattern of
-the weight matrix, showing that hardware-reconfigurable reduction
-topologies can absorb the irregular sparsity of training-time gradients.
-
-\subsection{Positioning This Work}
-
-Taken together, the four designs span complementary regions of the
-sparse-acceleration space. OuterSPACE and SpArch prioritise
-high-throughput sparse--sparse accumulation, with SpArch specifically
-attacking the merger phase. ExTensor emphasises operand intersection and
-zero-pair skipping. SIGMA targets reconfigurable reduction for sparse DNN
-training. Each assumes a throughput regime, scheduling mechanism, or
-memory hierarchy that is not available on a Cyclone V FPGA. This project
-instead targets the simpler but practically relevant CSR SpMM case on a
-resource-constrained FPGA SoC, aligning the storage format, datapath, and
-quantisation strategy with the dominant cost of the workload.
+These designs target high-throughput sparse--sparse accumulation, tensor
+intersection, or reconfigurable reduction networks, and assume scheduling
+machinery or memory systems well beyond a small Cyclone~V SoC. This project
+therefore focuses on the narrower CSR SpMM case: one sparse input, one dense
+input, a row-wise output order, and a datapath sized around the BRAM and DSP
+resources available on the DE1-SoC.
 
 \section{Hardware Platform Alternatives}
 
@@ -571,45 +327,27 @@ that can be combined into a bespoke CSR SpMM datapath with a memory
 interface tailored to the access pattern, which is a practical choice
 for prototyping an accelerator architecture before any ASIC commitment.
 
+\vspace{2cm}
+
 \section{INT8 Quantisation}
+\label{sec:int8-background}
 
-\subsection{Motivation}
-
-Quantisation reduces the numerical precision of stored values, decreasing
-memory footprint and potentially increasing arithmetic
-throughput~\citep{jacob2018, nagel2021}. For SpMM specifically, quantisation
-acts directly on the bottleneck: an un-packed 32-bit word carries one
-operand, whereas INT8 packing places four operands in the same word. For a
-memory-bound kernel this reduces the number of RAM reads needed to fill an
-operand tile by the same factor, which is the dominant reason INT8 is
-attractive for SpMM. The concrete cycle-level implications on the
-accelerator datapath are developed in Chapter~\ref{ch:design}.
-
-\subsection{Symmetric Linear Quantisation}
-
-The project adopts runtime symmetric linear quantisation. Given a vector $\mathbf{v}$
-of full-precision values, the maximum absolute value $v_{\max} = \max_i |v_i|$
-is computed, and each value is mapped to a signed 8-bit integer by
+INT8 is included in this background chapter only because it changes the memory
+traffic argument: four signed 8-bit operands fit in one 32-bit BRAM word. For a
+memory-bound CSR SpMM kernel, this attacks the operand-supply bottleneck more
+directly than widening the MAC array. The implementation uses symmetric linear
+quantisation~\citep{jacob2018, nagel2021}: for a vector $\mathbf{v}$,
+$v_{\max} = \max_i |v_i|$ is computed and each value is mapped as
 \begin{equation}
   q_i = \mathrm{clip}\!\left(\operatorname{round}\!\left(
           \frac{v_i}{v_{\max}} \cdot 127 \right),\,-127,\,127\right),
   \label{eq:quant}
 \end{equation}
-where the scale factor is $s = v_{\max} / 127$. Reconstruction uses
-$\hat{v}_i = q_i \cdot s$, so the quantisation error is bounded by
-$|e_i| \leq s/2$. Symmetric quantisation was preferred over asymmetric because
-it eliminates the need for a zero-point offset in the inner MAC loop, simplifying
-the hardware accumulation logic.
-
-\subsection{Accumulation Precision}
-
-INT8 accumulation into INT8 is insufficient for most practical workloads:
-a sum of $K$ products of INT8 values each up to $\pm 127$ can reach
-$\pm 127^2 \cdot K = \pm 16{,}129 K$, which overflows INT8 and INT16 even for
-moderate $K$. The present design therefore accumulates into INT32, which
-can represent sums of up to $2^{31}/16{,}129 \approx 133{,}000$ elements before
-overflow. This matches the widely adopted practice of INT8$\times$INT8 with INT32
-accumulation as described by Jacob et al.~\citep{jacob2018}.
+with scale $s = v_{\max}/127$. Symmetry removes the zero-point correction that
+an affine quantiser would add to every MAC, and the hardware accumulates
+INT8$\times$INT8 products into INT32 rather than back into INT8. The detailed
+quantisation and dequantisation examples are in
+Appendix~\ref{app:quant-definition}.
 
 \section{Roofline Analysis and Design Implications}
 \label{sec:roofline}
@@ -646,11 +384,11 @@ is capped by the peak arithmetic rate.
       % Memory roof: throughput = BW * OI; BW = 100 MB/s (one 32-bit read per cycle @ 50 MHz = 200 MB/s; but shared => 100)
       % So throughput (MMACs/s) = 100 * OI (if OI in MACs/byte)
       \addplot[domain=0.03:4, samples=2, thick, blue!70!black] {100*x};
-      \addlegendentry{Memory-bandwidth roof ($\approx$100\,MB/s)};
+      \addlegendentry{Memory-bandwidth roof ($\approx$100\,MB/s)}
 
       % Compute roof: 400 MMACs/s peak
       \addplot[domain=4:20, samples=2, thick, red!70!black] {400};
-      \addlegendentry{Compute roof (400\,MMACs/s)};
+      \addlegendentry{Compute roof (400\,MMACs/s)}
 
       % Connector at the knee (x=4)
       \addplot[domain=4:4, samples=2, thick, dashed, gray] coordinates {(4,5)(4,400)};
@@ -680,7 +418,7 @@ is capped by the peak arithmetic rate.
 
 
 SpMM sits firmly in the memory-bound regime for the reasons developed in
-Section~2.2: low operand reuse and indirect access keep the arithmetic
+Section~\ref{sec:sparsity-design-problem}: low operand reuse and indirect access keep the arithmetic
 intensity well below the knee. The practical implication for accelerator
 design is that widening the MAC array yields only a small gain unless
 operand supply is widened alongside it. Quantisation addresses this
