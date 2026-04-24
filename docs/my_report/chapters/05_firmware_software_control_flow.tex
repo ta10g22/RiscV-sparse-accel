@@ -487,14 +487,44 @@ work.
 
 \begin{figure}[htbp]
   \centering
-  \fbox{\parbox[c][55mm][c]{0.88\linewidth}{\centering
-  Placeholder: speedup vs matrix size (T1--T4) for all three stages.
-  X-axis: matrix dimension ($8, 16, 32, 64$). Y-axis: speedup.
-  Three lines: Baseline, DSP MAC, INT8.}}
-  \caption{Speedup versus matrix size for tests T1--T4. All three stages
-           show increasing speedup as problem size grows, confirming that
-           fixed setup overhead is amortised effectively at larger
-           problem sizes.}
+  \begin{tikzpicture}
+    \begin{axis}[
+      width=0.82\linewidth,
+      height=6.8cm,
+      xlabel={Matrix dimension $M = K$},
+      ylabel={Speedup vs PicoRV32 (INT32)},
+      xmode=log, log basis x=2,
+      xtick={8,16,32,64}, xticklabels={8,16,32,64},
+      ymin=0, ymax=65,
+      ymajorgrids, xmajorgrids,
+      grid style={gray!25},
+      legend pos=north west,
+      legend cell align={left},
+      legend style={font=\footnotesize, draw=gray!50},
+      tick label style={font=\footnotesize},
+      label style={font=\small},
+      every mark/.append style={mark size=2.3pt},
+    ]
+      \addplot[mark=*, thick, blue!70!black]
+        coordinates {(8,12.12) (16,15.78) (32,17.53) (64,18.12)};
+      \addlegendentry{Baseline}
+      \addplot[mark=square*, thick, red!70!black]
+        coordinates {(8,14.07) (16,19.67) (32,22.72) (64,24.03)};
+      \addlegendentry{Parallel DSP MAC}
+      \addplot[mark=triangle*, thick, black!60!green]
+        coordinates {(8,18.93) (16,34.28) (32,48.25) (64,56.80)};
+      \addlegendentry{INT8 packed}
+    \end{axis}
+  \end{tikzpicture}
+  \caption{Speedup versus matrix size for tests T1--T4 (fixed $N = 8$,
+           75\% uniform sparsity) across the three optimisation stages.
+           All three curves rise as problem size grows, confirming that
+           fixed setup overhead (tile clear, row-bound load, final
+           writeback) is amortised effectively at larger sizes. The
+           baseline and DSP curves flatten by T4, whereas the INT8
+           curve is still climbing steeply, indicating that INT8 packing
+           not only shifts the absolute speedup upward but also extends
+           the useful scaling regime.}
   \label{fig:speedup-size}
 \end{figure}
 
@@ -528,7 +558,50 @@ speedup and shows the design remains practical well into the sparsity
 regimes typical of GNN workloads. Real social-graph GNN matrices
 often exceed 99\% sparsity, where absolute cycle counts are low and
 the relative speedup may fall further, but the acceleration in
-absolute time would still be valuable.
+absolute time would still be valuable. Figure~\ref{fig:speedup-sparsity}
+plots the three-stage trend.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}
+    \begin{axis}[
+      width=0.82\linewidth,
+      height=6.8cm,
+      xlabel={Sparsity (\%)},
+      ylabel={Speedup vs PicoRV32},
+      xtick={50,75,90},
+      ymin=0, ymax=60,
+      ymajorgrids, xmajorgrids,
+      grid style={gray!25},
+      legend pos=north east,
+      legend cell align={left},
+      legend style={font=\footnotesize, draw=gray!50},
+      tick label style={font=\footnotesize},
+      label style={font=\small},
+      every mark/.append style={mark size=2.3pt},
+    ]
+      \addplot[mark=*, thick, blue!70!black]
+        coordinates {(50,16.37) (75,16.14) (90,15.55)};
+      \addlegendentry{Baseline}
+      \addplot[mark=square*, thick, red!70!black]
+        coordinates {(50,21.73) (75,21.11) (90,19.59)};
+      \addlegendentry{Parallel DSP MAC}
+      \addplot[mark=triangle*, thick, black!60!green]
+        coordinates {(50,52.70) (75,47.32) (90,37.24)};
+      \addlegendentry{INT8 packed}
+    \end{axis}
+  \end{tikzpicture}
+  \caption{Speedup versus sparsity for tests T7--T9 (fixed
+           $M = K = N = 32$, uniform pattern) across the three
+           optimisation stages. The baseline and DSP stages are almost
+           insensitive to sparsity because their cycle counts are
+           dominated by per-row overhead that scales with $M$, not with
+           NNZ. The INT8 stage shows a pronounced decline, as reducing
+           memory-bandwidth cost makes the residual fixed-per-row
+           traversal overhead a larger relative share of the
+           accelerator's total cycles.}
+  \label{fig:speedup-sparsity}
+\end{figure}
 
 \subsection{Pattern sensitivity (T8, T10, T11)}
 

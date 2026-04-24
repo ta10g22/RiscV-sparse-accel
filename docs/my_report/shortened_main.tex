@@ -1,0 +1,80 @@
+%% ----------------------------------------------------------------
+%% shortened_main.tex -- Shortened version of the project report for
+%% Turnitin plagiarism checking. Contains the introduction through the
+%% conclusion only. No title page, abstract, statement of originality,
+%% acknowledgements, table of contents, bibliography, or appendices.
+%% ----------------------------------------------------------------
+\documentclass[oneside]{ecsproject}
+\graphicspath{{./}{figures/}{../Figures/}}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{placeins}
+\usepackage{pdfpages}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usetikzlibrary{matrix,positioning,arrows.meta,fit,shapes.geometric,calc,decorations.pathreplacing}
+\hypersetup{colorlinks=true}
+\input{Definitions}
+
+\newcommand{\setbodymargins}{
+\setmarginsrb           {1.2in}
+                        {0.6in}
+                        {0.8in}
+                        {0.8in}
+                        {20pt}
+                        {0.25in}
+                        {9pt}
+                        {0.3in}
+}
+
+% Suppress "undefined reference" warnings from labels that live only in the
+% removed appendices or bibliography; these show as ?? in the output but do
+% not affect the prose the plagiarism check is looking at.
+\begin{document}
+\setbodymargins
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+\input{chapters/01_introduction}
+\input{chapters/02_background_design_motivation}
+\input{chapters/03_system_specification_platform}
+\input{chapters/04_accelerator_design_optimisation}
+\input{chapters/06_methodology_verification}
+\input{chapters/05_firmware_software_control_flow}
+\input{chapters/08_reflection_limitations_pm}
+\input{chapters/09_conclusion}
+
+% ------------------------------------------------------------
+% Resolve citation numbers by reading the bibliography into a
+% discarded box. \bibitem still writes \bibcite to the .aux file
+% as a side effect, so \cite{...} expands to the correct number,
+% but nothing visible is emitted and no pages are added. This
+% keeps the shortened document's page numbering aligned with the
+% full archive copy.
+% ------------------------------------------------------------
+\makeatletter
+\let\bibsection\relax
+\renewenvironment{thebibliography}[1]{%
+  \setbox\@tempboxa=\vbox\bgroup
+    \list{\@biblabel{\the\c@NAT@ctr}}{%
+      \labelsep=0pt\labelwidth=0pt\leftmargin=0pt\itemindent=0pt%
+      \@bibsetup{#1}\global\c@NAT@ctr\z@%
+    }%
+    \sloppy\clubpenalty=4000\widowpenalty=4000%
+    \sfcode`\.=\@m
+}{%
+    \def\@noitemerr{\@latex@warning{Empty bibliography}}%
+    \endlist
+  \egroup
+}
+\makeatother
+\bibliographystyle{unsrtnat}
+\bibliography{bib/ECS}
+
+\end{document}
