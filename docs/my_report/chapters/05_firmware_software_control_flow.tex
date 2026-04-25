@@ -545,34 +545,87 @@ future measurement target.
 \section{Resource and Timing Evaluation}
 \label{sec:resources}
 
-Table~\ref{tab:quartus-final} gives estimated resource utilisation for
-the three build variants. These are pre-place-and-route estimates from
-the Quartus Fitter combined with known design parameters, pending final
-post-fit reports. Utilisation is modest: roughly 16\% of ALMs, 5\%
-of M10K BRAMs, and 9\% of DSP blocks. The 16 M10Ks implement the shared
-64\,KB RAM, while the 8 DSPs match the $TN = 8$ MAC lanes. All three
-builds meet the 50\,MHz timing constraint.
+Table~\ref{tab:quartus-final} reports the final Quartus compilation
+results for the complete \texttt{soc\_top} design on the Cyclone~V
+5CSEMA5F31C6. The design uses 15,745 of 32,070 ALMs, corresponding to
+49\% logic utilisation, 20,569 registers, 526,336 of 4,065,280 block
+memory bits, and 21 of 87 DSP blocks. The accelerator is the dominant
+logic consumer, accounting for 12,516 combinational ALUTs, 17,151
+registers, and 18 DSP blocks, while the shared 64\,KB RAM accounts for
+almost all block memory usage (524,288 of 526,336 bits). The final
+multicorner timing analysis met the 50\,MHz clock constraint with a
+worst-case setup slack of 4.852\,ns, worst-case hold slack of 0.085\,ns,
+and design-wide total negative slack of 0.000\,ns. Quartus Power
+Analyzer estimated total thermal power dissipation at 658.31\,mW
+(221.91\,mW core dynamic, 413.31\,mW core static, and 23.09\,mW I/O),
+but this value is treated as indicative only because the tool reported
+low confidence due to insufficient user-supplied toggle-rate data.
 
 \begin{table}[htbp]
   \centering
   \small
-  \begin{tabular}{lccccc}
+  \begin{tabular}{lrrr}
   \toprule
-  Build & ALMs & Registers & M10K BRAMs & DSP blocks & Fmax (MHz) \\
+  Resource & Used & Available & Utilisation \\
   \midrule
-  Baseline accelerator  & $\approx$4,800 & $\approx$7,500 & 16 & 8 & 50+ \\
-  Parallel DSP MAC      & $\approx$5,000 & $\approx$7,800 & 16 & 8 & 50+ \\
-  INT8 packed (current) & $\approx$5,200 & $\approx$8,000 & 16 & 8 & 50+ \\
-  \midrule
-  Available (Cyclone~V) & 32,070 & 128,280 & 397 & 87 & n/a \\
+  Logic utilisation (ALMs) & 15,745 & 32,070 & 49\% \\
+  Logic registers          & 20,569 & 128,280 & 16\% \\
+  Block memory bits        & 526,336 & 4,065,280 & 13\% \\
+  DSP blocks               & 21 & 87 & 24\% \\
+  I/O pins                 & 69 & 457 & 15\% \\
+  PLLs                     & 0 & 6 & 0\% \\
+  Clock frequency          & 50\,MHz met & --- & WNS $+4.852$\,ns \\
   \bottomrule
   \end{tabular}
-  \caption{Estimated resource utilisation for the three build variants on
-           the Cyclone~V 5CSEMA5F31C6. All three designs meet the 50\,MHz
-           timing constraint. Final post-fit numbers to be updated in the
-           next revision.}
+  \caption{Final Quartus post-fit resource utilisation and timing results
+           for \texttt{soc\_top} on the Cyclone~V 5CSEMA5F31C6.}
   \label{tab:quartus-final}
 \end{table}
+
+Table~\ref{tab:quartus-hierarchy} breaks out the fitted resource usage
+by hierarchy. The accelerator dominates logic and DSP consumption
+(approximately 85\% of ALUTs, 93\% of registers, and 86\% of DSP blocks
+at the top level), and within the accelerator the datapath is the
+heaviest consumer because it contains the \texttt{C\_Tile} register
+array and the parallel MAC lanes. The PicoRV32 CPU occupies a small
+fraction of the design.
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \begin{tabular}{lrrrr}
+  \toprule
+  Entity & ALUTs & Registers & Block mem.\ bits & DSP \\
+  \midrule
+  \texttt{soc\_top}              & 14,728 & 18,379 & 526,336 & 21 \\
+  \quad\texttt{accel\_top}       & 12,516 & 17,151 & 0       & 18 \\
+  \quad\quad\texttt{accel\_ctrl} &  5,829 &    220 & 0       &  2 \\
+  \quad\quad\texttt{accel\_datapath} &  6,662 & 16,640 & 0  & 16 \\
+  \quad\texttt{altsyncram} (shared RAM) & 36 & 2 & 524,288 & 0 \\
+  \quad\texttt{picorv32}         &  1,648 &  1,026 & 2,048   &  3 \\
+  \quad\texttt{simpleuart}       &    231 &    131 & 0       &  0 \\
+  \bottomrule
+  \end{tabular}
+  \caption{Final post-fit resource utilisation by hierarchy for the
+           implemented \texttt{soc\_top}.}
+  \label{tab:quartus-hierarchy}
+\end{table}
+
+Hierarchical power estimation is consistent with the logic breakdown:
+the accelerator accounts for approximately 57\% of the reported
+\texttt{soc\_top} hierarchy power, of which the datapath alone
+contributes about 79\%. The CPU and shared RAM together account for
+around 11\% of hierarchy power. Because the overall power estimate has
+low confidence, these percentages are presented as relative indicators
+of where dynamic activity concentrates rather than as absolute energy
+measurements.
+
+The fitted numbers above supersede the pre-place-and-route estimates
+that appeared in earlier drafts. Only the INT8 packed build
+corresponding to the final reported results was taken through the
+complete Quartus fit; per-stage post-fit comparisons of the baseline
+and DSP MAC variants were not part of the final flow and remain an
+item for future work.
 
 \section{Fairness, Limitations, and Threats to Validity}
 \label{sec:threats}
@@ -588,9 +641,8 @@ model-based and should be read only as a cross-check, not as a
 same-platform measurement. Other limits are that each cycle count is a
 single deterministic run rather than a distribution, the matrices are
 synthetic rather than real workload traces, all data is held in on-chip
-BRAM rather than DRAM, MMIO/polling overhead is included in the
-accelerator timings, and final post-fit resource reports remain to be
-substituted for the estimates in Table~\ref{tab:quartus-final}.
+BRAM rather than DRAM, and MMIO/polling overhead is included in the
+accelerator timings.
 
 \section{Critical Evaluation}
 

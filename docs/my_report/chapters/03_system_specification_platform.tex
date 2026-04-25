@@ -69,25 +69,27 @@ in Table~\ref{tab:fpga-resources}~\citep{cyclonev_handbook}.
   \small
   \begin{tabular}{lrr}
   \toprule
-  Resource & Total available & Used (estimated) \\
+  Resource & Total available & Used (final post-fit) \\
   \midrule
-  Adaptive Logic Modules (ALMs) & 32,070 & $\approx$5,000 (16\%) \\
-  Logic registers & 128,280 & $\approx$8,000 (6\%) \\
-  M10K memory blocks (10\,Kbit each) & 397 & $\approx$20 (5\%) \\
-  DSP 18$\times$18 multiplier blocks & 87 & $\approx$8 (9\%) \\
-  I/O pins & 457 & --- \\
+  Adaptive Logic Modules (ALMs) & 32,070 & 15,745 (49\%) \\
+  Logic registers & 128,280 & 20,569 (16\%) \\
+  Block memory bits & 4,065,280 & 526,336 (13\%) \\
+  DSP 18$\times$18 multiplier blocks & 87 & 21 (24\%) \\
+  I/O pins & 457 & 69 (15\%) \\
   \bottomrule
   \end{tabular}
-  \caption{Cyclone~V 5CSEMA5F31C6 resource availability and estimated
-           design utilisation.}
+  \caption{Cyclone~V 5CSEMA5F31C6 resource availability and final
+           post-fit design utilisation for the complete \texttt{soc\_top}.}
   \label{tab:fpga-resources}
 \end{table}
 
 The critical resources are M10K BRAMs and DSP blocks. The shared 64\,KB
-RAM consumes around 16 M10Ks~\citep{intel_m10k}, while the eight-lane
-accelerator maps naturally onto eight DSP multiplier
-blocks~\citep{intel_dsp_blocks}. The estimated utilisation leaves
-sufficient headroom for the control logic and small local buffers.
+RAM consumes the bulk of the block memory bits~\citep{intel_m10k}, while
+the eight MAC lanes, the DSP-based accelerator controller paths, and the
+PicoRV32 hardware multiplier together use 21 DSP
+blocks~\citep{intel_dsp_blocks}. The final utilisation leaves roughly
+half the logic fabric and three-quarters of the DSP blocks free for
+further extension.
 
 \section{Memory and Interconnect Architecture}
 \label{sec:memory-arch}
