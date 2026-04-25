@@ -26,15 +26,67 @@ sizes to what fits in the 64\,KB shared BRAM. The shared-memory structure
 is therefore the central platform constraint.
 
 Figure~\ref{fig:soc-block} shows the top-level block diagram. The PicoRV32
-CPU, the SpMM accelerator, UART, and GPIO all hang off a simple interconnect
-that routes requests to the BRAM or to one of the memory-mapped peripheral
-regions.
+CPU drives a valid/ready memory bus into the SoC interconnect, which decodes
+the address and routes to four slave regions: BRAM Port~A, the SpMM
+accelerator's MMIO registers, GPIO, and the UART. The accelerator
+additionally accesses BRAM directly through Port~B, which lets it stream
+operands and writeback concurrently with CPU activity on Port~A. All blocks
+are clocked from the 50\,MHz on-board oscillator.
 
 \begin{figure}[htbp]
-    \centering
-    \includegraphics[width=1\textwidth]{top_block_dia.jpg}
-    \caption{Top-level RISC-V SoC block diagram.}
-    \label{fig:soc-block}
+  \centering
+  \begin{tikzpicture}[
+    font=\small,
+    block/.style={draw, thick, rounded corners=2pt, align=center},
+    cpu/.style={block, fill=blue!12, minimum width=2.6cm, minimum height=1.4cm},
+    accel/.style={block, fill=orange!15, minimum width=2.8cm, minimum height=1.4cm},
+    intc/.style={block, fill=gray!15, minimum width=11.0cm, minimum height=0.9cm},
+    ram/.style={block, fill=purple!10, minimum width=3.6cm, minimum height=1.4cm},
+    periph/.style={block, font=\footnotesize, minimum width=2.0cm, minimum height=1.2cm},
+    clk/.style={block, fill=yellow!25, minimum width=4.6cm, minimum height=0.6cm,
+                font=\footnotesize},
+    arr/.style={-{Stealth[length=2.5mm]}, thick},
+    biarr/.style={{Stealth[length=2mm]}-{Stealth[length=2mm]}, thick},
+    portlbl/.style={font=\scriptsize, fill=white, inner sep=1.5pt}
+  ]
+    \node[clk] (clk) at (0, 5.0)
+      {50\,MHz on-board oscillator (\texttt{clk\_50mhz})};
+
+    \node[cpu]   (cpu) at (-4.0, 3.3) {PicoRV32 CPU\\\footnotesize RV32IM};
+    \node[accel] (acc) at ( 4.0, 3.3) {SpMM Accelerator\\\footnotesize \texttt{accel\_top}};
+
+    \node[intc] (bus) at (0, 1.5)
+      {SoC Interconnect \quad (address decode)};
+
+    \node[ram] (ram) at (-4.0, -0.6)
+      {64\,KB shared\\dual-port BRAM\\\footnotesize\texttt{altsyncram}};
+    \node[periph, fill=green!12] (gpio) at (0.0, -0.6)
+      {GPIO\\\scriptsize LEDs/btns\\\scriptsize 7-seg};
+    \node[periph, fill=cyan!15]  (uart) at (4.0, -0.6)
+      {UART\\\scriptsize\texttt{simpleuart}\\\scriptsize 115200 baud};
+
+    \draw[arr, densely dashed] (clk.south) -- (0, 4.3)
+      node[portlbl, midway, right=2pt]{system clock};
+    \draw[densely dashed, thick] (-4.0, 4.3) -- (4.0, 4.3);
+    \draw[arr, densely dashed] (-4.0, 4.3) -- (cpu.north);
+    \draw[arr, densely dashed] ( 4.0, 4.3) -- (acc.north);
+    \draw[arr, densely dashed] ( 0.0, 4.3) -- (bus.north);
+
+    \draw[biarr] (cpu.south) -- (cpu.south |- bus.north)
+      node[portlbl, midway, right=2pt]{valid/ready};
+    \draw[biarr] (acc.south) -- (acc.south |- bus.north)
+      node[portlbl, midway, right=2pt]{MMIO};
+
+    \draw[biarr] (bus.south -| ram.north) -- (ram.north)
+      node[portlbl, midway, right=2pt]{Port~A};
+    \draw[biarr] (bus.south -| gpio.north) -- (gpio.north);
+    \draw[biarr] (bus.south -| uart.north) -- (uart.north);
+
+    \draw[biarr] (acc.east) -- ++(0.9, 0) -- ++(0, -5.0) -| (ram.south);
+    \node[portlbl] at (6.5, 1.5) {Port~B (direct)};
+  \end{tikzpicture}
+  \caption{Top-level RISC-V SoC block diagram.}
+  \label{fig:soc-block}
 \end{figure}
 
 \section{Why a Soft RISC-V SoC}

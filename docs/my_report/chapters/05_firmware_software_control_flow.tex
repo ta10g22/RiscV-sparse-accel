@@ -236,10 +236,9 @@ Speedup is defined as
 with both times in CPU cycles on the same 50\,MHz clock. For the
 RISC-V comparisons, $T_{\mathrm{CPU}}$ is the timed PicoRV32 software
 result (INT32 for the baseline and DSP stages, INT8 for the INT8
-stage). For the Cortex-M0 comparison, $T_{\mathrm{CPU}}$ is derived
-from the processor's published CPI model applied to the same
-benchmark definitions rather than measured on physical hardware;
-Section~\ref{sec:cortex} discusses the implications.
+stage). For the Cortex-M0 comparison, $T_{\mathrm{CPU}}$ is the
+measured cycle count from the synthesised Cortex-M0 softcore running
+the same benchmark firmware on the FPGA platform.
 
 \section{Baseline Accelerator Results}
 
@@ -384,13 +383,13 @@ valuable than the DSP arithmetic restructuring.
 \label{sec:cortex}
 
 Table~\ref{tab:cortex-results} compares the INT8 accelerator against a
-model-based ARM Cortex-M0 software reference, not a measurement on
-physical Cortex-M0 hardware. The model applies published single-issue
-CPI behaviour to the same benchmark definitions, giving a stronger
-embedded baseline than PicoRV32. Speedups are lower as expected, but the
-accelerator still reaches $11.92\times$ on T4. These figures are a
-cross-check; the PicoRV32 hardware measurements remain the primary
-evidence.
+synthesised ARM Cortex-M0 softcore baseline. The Cortex-M0 system was
+implemented on the same FPGA platform and executed the same firmware
+benchmark definitions as the PicoRV32 baseline, so the comparison
+provides a second hardware-measured embedded-processor reference point
+rather than a cycle model. The Cortex-M0 is a stronger baseline than
+PicoRV32, so the measured speedups are lower as expected; the
+accelerator still reaches $11.92\times$ on T4.
 
 \begin{table}[htbp]
   \centering
@@ -413,9 +412,10 @@ evidence.
   T12 & 169,710 & 18,519 & $9.16\times$  & PASS \\
   \bottomrule
   \end{tabular}
-  \caption{Model-based ARM Cortex-M0 software SpMM reference versus the
-           final INT8 accelerator. The Cortex-M0 is a stronger baseline
-           than PicoRV32, so speedups are correspondingly lower; the
+  \caption{Synthesised ARM Cortex-M0 softcore software SpMM reference
+           versus the final INT8 accelerator, both measured on the same
+           FPGA platform. The Cortex-M0 is a stronger baseline than
+           PicoRV32, so speedups are correspondingly lower; the
            accelerator still achieves up to $11.92\times$ speedup.}
   \label{tab:cortex-results}
 \end{table}
@@ -538,7 +538,7 @@ the INT8 stage all three report identical accelerator cycle counts of
 11,039 and CPU counts of 522,391. At this scale, total NNZ dominates
 cycle count more than spatial distribution. Larger matrices may expose
 load imbalance from very dense rows, but the present benchmark sizes do
-not trigger that effect. The Cortex-M0 model shows small differences
+not trigger that effect. The Cortex-M0 baseline shows small differences
 between the same three patterns, so pattern sensitivity remains a useful
 future measurement target.
 
@@ -636,9 +636,11 @@ clock, and every timed accelerator result is checked against a software
 reference. The PicoRV32 baseline uses hardware \texttt{MUL}, but it is
 still a simple in-order core with no cache, speculation, SIMD, or
 aggressively tuned software kernel, so the headline speedups should not
-be generalised to modern vector CPUs. The Cortex-M0 comparison is
-model-based and should be read only as a cross-check, not as a
-same-platform measurement. Other limits are that each cycle count is a
+be generalised to modern vector CPUs. The Cortex-M0 comparison is a
+same-platform hardware measurement on the synthesised softcore but uses
+an unoptimised C reference, so it should be read as a second embedded
+baseline rather than a tuned production-software comparison. Other
+limits are that each cycle count is a
 single deterministic run rather than a distribution, the matrices are
 synthetic rather than real workload traces, all data is held in on-chip
 BRAM rather than DRAM, and MMIO/polling overhead is included in the
@@ -655,6 +657,6 @@ misleading because they target different scales and memory systems. The
 relevant conclusion is narrower: on this DE1-SoC platform, a small
 MMIO-driven CSR SpMM accelerator achieves a $56.80\times$ peak and
 $45.28\times$ average speedup over PicoRV32, and up to $11.92\times$
-over the modelled Cortex-M0 baseline. With the limitations in
+over the synthesised Cortex-M0 softcore baseline. With the limitations in
 Section~\ref{sec:threats}, the highest-leverage optimisation was clearly
 reducing operand traffic through INT8 packing.
