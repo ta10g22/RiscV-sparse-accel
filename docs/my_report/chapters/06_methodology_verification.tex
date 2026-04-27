@@ -136,7 +136,7 @@ halts the test.
 The integration testbench instantiates PicoRV32, the accelerator, and a
 64\,KB behavioural RAM, preloads the compiled firmware image, releases
 reset, and lets the firmware execute its complete benchmark sequence
-until the CPU writes a sentinel value to a pre-agreed address. This
+until the CPU writes a sentinel value to a predefined address. This
 closes the loop between the software control flow of
 Chapter~\ref{ch:firmware} and the hardware described in
 Chapter~\ref{ch:design}: any firmware change that breaks the MMIO
@@ -152,13 +152,14 @@ the CPU memory handshake.
 Hardware-level verification is embedded directly inside the firmware
 benchmark harness described in Section~\ref{sec:data-prep}. For each
 of the 12 cases and at each of the three accelerator stages, firmware
-generates deterministic inputs from fixed seeds, computes the quantised
+generates deterministic inputs from fixed seeds, computes the matching
 CPU reference, runs the accelerator on the same inputs, and performs an
 element-by-element comparison between the accelerator output and the
-software reference. Because CPU and accelerator apply the same
-symmetric INT8 quantisation to the same data and accumulate identical
-INT32 partial sums, their outputs must agree exactly; a single mismatch
-flags the case as FAIL and no cycle count is recorded.
+software reference. The baseline and DSP stages are checked against the
+INT32 CPU reference; the INT8 stage is checked against the quantised
+INT8 CPU reference. In both cases, CPU and accelerator accumulate the
+same integer partial sums, so their outputs must agree exactly; a
+single mismatch flags the case as FAIL and no cycle count is recorded.
 
 Taken together with the simulation tier, this yields three independent
 layers of functional checking before any performance measurement is

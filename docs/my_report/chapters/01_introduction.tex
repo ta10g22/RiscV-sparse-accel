@@ -22,25 +22,25 @@ performs, with most cycles spent chasing indirect indices, handling row
 boundaries, and issuing scattered memory accesses.
 
 With the rapid rise in demand for AI, there has been a matching rise in
-demand for better model algorithms, more data, and above all more compute.
-On the compute side, most AI workloads are now executed on application
-specific integrated circuits (ASICs), since these have been shown to
-maximise throughput, energy efficiency, and cost effectiveness for the
+demand for better model algorithms, more data, and above all more computation.
+On the compute side, most AI workloads are now executed on
+application-specific integrated circuits (ASICs), since these have been shown to
+maximise throughput, energy efficiency, and cost-effectiveness for the
 particular matrix operations that AI models need to run. Some of the most
-well known commercial examples are the Tensor Processing Unit (TPU) from
+well-known commercial examples are the Tensor Processing Unit (TPU) from
 Google and the Neural Processing Unit (NPU) from Apple. The design of any
 such ASIC, however, almost always begins with prototyping on a Field
 Programmable Gate Array (FPGA), because FPGAs can execute many operations
-in parallel and are easily reconfigurable, which keeps the cost and
-turnaround time of architectural exploration both low and fast. An
+in parallel and are easily reconfigurable, which keeps architectural
+exploration inexpensive and quick. An
 FPGA-hosted accelerator for SpMM is therefore a natural first step towards
 a fully custom silicon implementation, and is the platform targeted by
 this project.
 
 \section{Project Aim}
 
-The aim of this project is to design, implement, and evaluate a RISC-V
-compatible hardware accelerator for compressed sparse row (CSR) SpMM on
+The aim of this project is to design, implement, and evaluate a
+RISC-V-compatible hardware accelerator for compressed sparse row (CSR) SpMM on
 the Terasic DE1-SoC FPGA board. The accelerator must integrate cleanly
 into a small system-on-chip (SoC), share on-chip block RAM with the CPU,
 and deliver a measurable, reproducible speedup over a comparable software
@@ -58,7 +58,7 @@ Beyond the core aim, the project defined three stretch goals at the
 outset. The first was to introduce a custom RISC-V instruction to trigger
 the accelerator directly from the CPU pipeline, rather than through a
 memory-mapped register write, which would reduce launch overhead and
-demonstrate that the PicoRV32 softcore can be extended at the instruction
+demonstrate that the PicoRV32 soft core can be extended at the instruction
 set level. The second was to implement runtime INT8 quantisation so that
 operand fetch bandwidth could be reduced by packing four quantised values
 into a single 32-bit RAM word. The third was to extend the accelerator

@@ -108,7 +108,7 @@ for (row = 0; row < M; row++) {
 \label{lst:spmm-cpu}
 
 Only the M-extension \texttt{MUL} instruction is used; there is no
-SIMD, no loop unrolling, and no software prefetching. The baseline is
+SIMD, loop unrolling, or software prefetching. The baseline is
 deliberately simple: its role is not to maximise CPU throughput but to
 provide a credible, readable reference against which the accelerator's
 structural advantage can be measured. The INT8 reference
@@ -226,7 +226,7 @@ static inline uint32_t read_cycles(void) {
 
 The counter wraps at $2^{32}$ cycles, roughly 85 seconds at 50\,MHz.
 The largest benchmark completes in under two million cycles, so
-wrap-around is a non-issue and firmware needs no 32-to-64-bit
+wrap-around is a non-issue and firmware needs no 32-bit to 64-bit
 extension.
 
 Speedup is defined as
@@ -237,7 +237,7 @@ with both times in CPU cycles on the same 50\,MHz clock. For the
 RISC-V comparisons, $T_{\mathrm{CPU}}$ is the timed PicoRV32 software
 result (INT32 for the baseline and DSP stages, INT8 for the INT8
 stage). For the Cortex-M0 comparison, $T_{\mathrm{CPU}}$ is the
-measured cycle count from the synthesised Cortex-M0 softcore running
+measured cycle count from the synthesised Cortex-M0 soft core running
 the same benchmark firmware on the FPGA platform.
 
 \section{Baseline Accelerator Results}
@@ -383,7 +383,7 @@ valuable than the DSP arithmetic restructuring.
 \label{sec:cortex}
 
 Table~\ref{tab:cortex-results} compares the INT8 accelerator against a
-synthesised ARM Cortex-M0 softcore baseline. The Cortex-M0 system was
+synthesised ARM Cortex-M0 soft core baseline. The Cortex-M0 system was
 implemented on the same FPGA platform and executed the same firmware
 benchmark definitions as the PicoRV32 baseline, so the comparison
 provides a second hardware-measured embedded-processor reference point
@@ -412,7 +412,7 @@ accelerator still reaches $11.92\times$ on T4.
   T12 & 169,710 & 18,519 & $9.16\times$  & PASS \\
   \bottomrule
   \end{tabular}
-  \caption{Synthesised ARM Cortex-M0 softcore software SpMM reference
+  \caption{Synthesised ARM Cortex-M0 soft-core software SpMM reference
            versus the final INT8 accelerator, both measured on the same
            FPGA platform. The Cortex-M0 is a stronger baseline than
            PicoRV32, so speedups are correspondingly lower; the
@@ -441,7 +441,7 @@ those costs over far more useful MAC work.
       width=0.82\linewidth,
       height=6.8cm,
       xlabel={Matrix dimension $M = K$},
-      ylabel={Speedup vs PicoRV32 (INT32)},
+      ylabel={Speedup vs PicoRV32},
       xmode=log, log basis x=2,
       xtick={8,16,32,64}, xticklabels={8,16,32,64},
       ymin=0, ymax=65,
@@ -637,9 +637,9 @@ reference. The PicoRV32 baseline uses hardware \texttt{MUL}, but it is
 still a simple in-order core with no cache, speculation, SIMD, or
 aggressively tuned software kernel, so the headline speedups should not
 be generalised to modern vector CPUs. The Cortex-M0 comparison is a
-same-platform hardware measurement on the synthesised softcore but uses
+same-platform hardware measurement on the synthesised soft core but uses
 an unoptimised C reference, so it should be read as a second embedded
-baseline rather than a tuned production-software comparison. Other
+baseline rather than a tuned production software comparison. Other
 limits are that the matrices are synthetic rather than real workload
 traces, all data is held in on-chip BRAM rather than DRAM, and
 MMIO/polling overhead is included in the accelerator timings.
@@ -665,6 +665,6 @@ misleading because they target different scales and memory systems. The
 relevant conclusion is narrower: on this DE1-SoC platform, a small
 MMIO-driven CSR SpMM accelerator achieves a $56.80\times$ peak and
 $45.28\times$ average speedup over PicoRV32, and up to $11.92\times$
-over the synthesised Cortex-M0 softcore baseline. With the limitations in
+over the synthesised Cortex-M0 soft core baseline. With the limitations in
 Section~\ref{sec:threats}, the highest-leverage optimisation was clearly
 reducing operand traffic through INT8 packing.

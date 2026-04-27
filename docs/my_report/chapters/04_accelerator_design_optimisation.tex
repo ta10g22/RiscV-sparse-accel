@@ -13,7 +13,7 @@ constraints they exposed.
 
 The accelerator has three jobs: walk the CSR structure of matrix $A$, stream
 row segments of matrix $B$ into a local buffer, and accumulate products into
-a tile of the output matrix $C$. It splits into two co-operating modules:
+a tile of the output matrix $C$. It splits into two cooperating modules:
 
 \begin{itemize}
   \item \texttt{accel\_ctrl}: a finite state machine that walks the CSR
@@ -112,7 +112,7 @@ Two local buffers carry the state of a tile.
 \textbf{\texttt{B\_Seg}} is an eight-element array of 32-bit signed values
 that holds the row segment of $B$ currently being consumed. For each nonzero
 $a_{ij}$ in row $i$ of $A$, the controller fills \texttt{B\_Seg} with
-$B[j, c_0:c_0{+}TN]$ before the MAC fires.
+$B[j, c_0:c_0{+}TN{-}1]$ before the MAC fires.
 
 \textbf{\texttt{C\_Tile}} is an $M_{\mathrm{max}} \times TN$ array of 32-bit
 signed accumulators that holds the partial sums for every row of $C$ within
@@ -122,6 +122,17 @@ read and updated on the same cycle. Keeping it flat, rather than as a set
 of per-row registers, matters because nonzeros from different rows often
 land in the same tile column and the flat layout lets those updates proceed
 back-to-back with no writeback/restore cycles between them.
+
+The fabric-register realisation is forced by the parallelism of the
+MAC stage. Each \texttt{mac\_en} pulse reads $TN = 8$ accumulator
+lanes for the same output row, adds $a \cdot \texttt{B\_Seg}[c]$ to
+each, and writes them back on the same cycle, which is eight
+simultaneous read-modify-write transactions on a single clock edge.
+A Cyclone~V M10K block exposes only two access ports, which is
+insufficient for eight parallel lane updates without either eight-way
+replication/banking or a multi-cycle schedule that would itself
+become the critical path. Implementing \texttt{C\_Tile} directly in
+fabric registers preserves the single-cycle MAC at modest ALM cost.
 
 The core operation is one line. For each nonzero $a = A[i, k]$ the
 controller asserts \texttt{mac\_en}, drives \texttt{mac\_row} $= i$ and
@@ -277,20 +288,16 @@ Table~\ref{tab:tn-tradeoffs} lists the alternatives.
 \begin{table}[htbp]
   \centering
   \small
-  \begin{tabular}{lccccp{3cm}}
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{ccccc>{\raggedright\arraybackslash}p{4.1cm}}
   \toprule
-  $TN$ & MAC lanes & Acc.\ registers & B-seg reads/NZ & DSP No. & Notes \\
+  $TN$ & MAC lanes & Acc.\ registers & B-seg reads/NZ & DSP count & Notes \\
   \midrule
-  1  & 1 & 64 & 1 & 1 &
-    Minimal resources; no parallelism; effectively sequential. \\
-  4  & 4 & 256 & 4 & 4 &
-    Moderate parallelism; reduced register pressure. \\
-  8  & 8 & 512 & 8 & 8 &
-    \textbf{Design point.} Good balance; DSP-mappable; 512-reg array feasible. \\
-  16 & 16 & 1024 & 16 & 16 &
-    Doubles resources; routing congestion; timing harder to close. \\
-  32 & 32 & 2048 & 32 & 32 &
-    Likely infeasible on Cyclone~V; 2048-reg array exceeds practical limits. \\
+  1  & 1  & 64   & 1  & 1  & Minimal resources; no parallelism; effectively sequential. \\[2pt]
+  4  & 4  & 256  & 4  & 4  & Moderate parallelism; reduced register pressure. \\[2pt]
+  8  & 8  & 512  & 8  & 8  & \textbf{Design point.} Good balance; DSP-mappable; 512-reg array feasible. \\[2pt]
+  16 & 16 & 1024 & 16 & 16 & Doubles resources; routing congestion; timing harder to close. \\[2pt]
+  32 & 32 & 2048 & 32 & 32 & Likely infeasible on Cyclone~V; 2048-reg array exceeds practical limits. \\
   \bottomrule
   \end{tabular}
   \caption{Resource and performance implications of different tile widths
@@ -318,6 +325,27 @@ Row-wise CSR allows the controller to track one row pointer at a time,
 stream most CSR accesses sequentially through BRAM Port~B, and write back
 \texttt{C\_Tile} with a simple row sweep. This is the traversal order used
 in the implemented FSM.
+
+The address arithmetic that drives Port~B follows directly from this
+order. For row $i$, nonzero index $p \in
+[\texttt{rowptr}[i],\texttt{rowptr}[i{+}1])$ with $j = \texttt{colidx}[p]$,
+lane index $\ell \in [0, TN{-}1]$, and tile-column origin $c_0$:
+\begin{align*}
+\text{rowptr addr}        &= \texttt{A\_ROW\_BASE} + 4\,i, \\
+\text{colidx addr}        &= \texttt{A\_COL\_BASE} + 4\,p, \\
+\text{values addr (INT32)} &= \texttt{A\_VAL\_BASE} + 4\,p, \\
+\text{values addr (INT8)} &= \texttt{A\_VAL\_BASE} + 4\,\lfloor p/4 \rfloor,
+                              \quad \text{byte} = p \bmod 4, \\
+\text{$B$ addr (INT32)}   &= \texttt{B\_BASE} + 4\,(jN + c_0 + \ell), \\
+\text{$B$ addr (INT8)}    &= \texttt{B\_BASE} + 4\,\lfloor (jN + c_0 + \ell)/4 \rfloor,
+                              \quad \text{byte} = (jN + c_0 + \ell) \bmod 4, \\
+\text{$C$ addr}           &= \texttt{C\_BASE} + 4\,(iN + c_0 + \ell).
+\end{align*}
+Every word address is naturally word-aligned: $c_0$ advances in steps
+of $TN = 8$ and $N$ is constrained to a multiple of four, so the INT8
+tile starts $jN + c_0$ are always multiples of four and the byte
+offset varies only with $\ell$. This keeps every Port~B request to a
+single 32-bit word with no cross-word splitting.
 
 \section{Memory Optimisation: the B-Segment Bottleneck}
 \label{sec:bseg}
@@ -397,7 +425,7 @@ change:
         \end{equation}
 \end{enumerate}
 
-Figure~\ref{fig:int8-extract} shows the byte-select and sign-extend path
+Figure~\ref{fig:int8-extract} shows the byte-select and sign-extension path
 for one 32-bit read.
 
 \begin{figure}[htbp]
@@ -448,7 +476,38 @@ for one 32-bit read.
 \end{figure}
 
 Accumulation and writeback remain INT32, so the change is confined to the
-memory-facing unpack/sign-extension path.
+memory-facing unpack/sign-extension path. The INT32 accumulator is
+comfortably wide for the benchmark suite: each INT8 product is bounded
+in magnitude by $127^2 = 16{,}129$, each output element accumulates at
+most $K = 64$ such products in the worst-case benchmark, giving a
+worst-case magnitude of about $1.03 \times 10^6$, roughly $2{,}000\times$
+below the $2^{31}-1$ overflow limit.
+
+Table~\ref{tab:int32-int8-cost} summarises the dominant per-nonzero
+cost in each mode and shows where the INT8 saving comes from.
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \begin{tabular}{p{3.0cm}p{4.5cm}p{5.5cm}}
+  \toprule
+  Step & INT32 mode & INT8 mode \\
+  \midrule
+  $B$-segment fill         & 8 one-word reads &
+                             2 one-word reads (4 bytes per word) \\[2pt]
+  MAC update               & 8 lanes, 32-bit $\times$ 32-bit &
+                             8 lanes, 8-bit $\times$ 8-bit, sign-extended to 32-bit \\[2pt]
+  Accumulator precision    & INT32 & INT32 (unchanged) \\[2pt]
+  Dominant saving          & (reference) &
+                             $4\times$ reduction in $B$-segment reads per nonzero \\
+  \bottomrule
+  \end{tabular}
+  \caption{Per-nonzero cost comparison between INT32 and INT8 modes,
+           covering only the inner-loop steps. CSR-index fetch,
+           tile-clear, and writeback amortise across many nonzeros and
+           are excluded from this comparison.}
+  \label{tab:int32-int8-cost}
+\end{table}
 
 \section{Physical Design Tradeoffs}
 
@@ -480,20 +539,27 @@ cycle reduction from baseline to final INT8 build.
 \begin{table}[htbp]
   \centering
   \small
-  \begin{tabular}{lccc}
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{p{1.9cm}p{3.4cm}p{3.6cm}p{1.4cm}p{2.4cm}}
   \toprule
-  Attribute & Baseline & DSP MAC & INT8 packed \\
+  Stage & Architectural change & Mechanism &
+    $B$ reads / NZ & Cycle reduction vs previous \\
   \midrule
-  MAC lanes & 8 & 8 & 8 \\
-  DSP mapping & Inferred & Explicit & Explicit \\
-  B reads per NZ & 8 & 8 & 2 \\
-  Operand bit-width & 32-bit & 32-bit & 8-bit (sign-ext to 32) \\
-  Accumulator precision & INT32 & INT32 & INT32 \\
-  Output format & INT32 & INT32 & INT32 \\
+  Baseline    & Generic 8-lane MAC inferred in fabric &
+                Quartus-inferred multipliers; 32-bit operands; INT32 accumulator &
+                8 & (reference) \\[3pt]
+  DSP MAC     & Registered-feedback form mapped to Cyclone~V DSP blocks &
+                Explicit DSP inference; 18 DSP blocks post-fit; same operand width &
+                8 & $1.32\times$ \\[3pt]
+  INT8 packed & Four INT8 operands per 32-bit word, sign-extended on read &
+                Byte-select unpack (Eq.~\ref{eq:byte-extract}); accumulator unchanged &
+                2 & $2.18\times$ \\
   \bottomrule
   \end{tabular}
-  \caption{Architectural attributes across the three design stages. Measured
-           speedups for each stage are reported in
+  \caption{Architectural change introduced at each stage, the mechanism
+           by which it took effect, the per-nonzero $B$-read cost it
+           produced, and the measured accelerator-cycle reduction
+           relative to the previous stage as reported in
            Chapter~\ref{ch:results}.}
   \label{tab:design-evolution}
 \end{table}

@@ -2,7 +2,8 @@
 \chapter{Background and Literature Review}
 \label{ch:motivation}
 
-There is a vast body of algorithms for Sparse Matrix Multiplication (SpMM),
+There is a vast body of algorithms for sparse matrix--dense matrix
+multiplication (SpMM),
 as well as many different storage formats for converting sparse matrices into
 representations that can be operated on efficiently. This chapter provides
 the information needed to understand the context and design decisions taken
@@ -88,8 +89,8 @@ operand $B$ still has to be streamed and accumulated efficiently.
 \subsection{The FLOP-to-Bandwidth Mismatch}
 
 Dense matrix multiplication is efficient because it has high operational
-intensity: for an $M \times K \times N$ General Matrix Multiply (GEMM), many
-Floating Point Operations (FLOPs) are performed for every byte of data loaded
+intensity: for an $M \times K \times N$ general matrix multiply (GEMM), many
+floating-point operations (FLOPs) are performed for every byte of data loaded
 from memory, with each operand reused across the $N$ output columns. Sparse
 matrix multiplication breaks this reuse pattern. For a CSR SpMM with $\text{NNZ}$
 nonzeros, the number of useful MACs per byte of CSR index data fetched is
@@ -321,7 +322,7 @@ impractical for a final-year project.
 
 FPGAs provide a practical middle ground: custom datapath parallelism,
 flexible on-chip memory organisation, and far lower power than a
-GPU~\citep{nurvitadhi2017}. The Cyclone V on the DE1-SoC supplies M10K
+GPU~\citep{nurvitadhi2017}. The Cyclone~V on the DE1-SoC supplies M10K
 BRAM blocks, DSP multiplier-accumulator blocks, and configurable logic
 that can be combined into a bespoke CSR SpMM datapath with a memory
 interface tailored to the access pattern, which is a practical choice
