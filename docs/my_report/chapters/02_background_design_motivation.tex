@@ -381,29 +381,29 @@ is capped by the peak arithmetic rate.
       tick label style={font=\scriptsize},
       label style={font=\small},
     ]
-      % Memory roof: throughput = BW * OI; BW = 100 MB/s (one 32-bit read per cycle @ 50 MHz = 200 MB/s; but shared => 100)
-      % So throughput (MMACs/s) = 100 * OI (if OI in MACs/byte)
-      \addplot[domain=0.03:4, samples=2, thick, blue!70!black] {100*x};
-      \addlegendentry{Memory-bandwidth roof ($\approx$100\,MB/s)}
+      % Memory roof: throughput = BW * OI; BW = 200 MB/s (one 32-bit word per cycle @ 50 MHz on Port B)
+      % So throughput (MMACs/s) = 200 * OI (with OI in MACs/byte)
+      \addplot[domain=0.03:2, samples=2, thick, blue!70!black] {200*x};
+      \addlegendentry{Memory-bandwidth roof ($\approx$200\,MB/s)}
 
       % Compute roof: 400 MMACs/s peak
-      \addplot[domain=4:20, samples=2, thick, red!70!black] {400};
+      \addplot[domain=2:20, samples=2, thick, red!70!black] {400};
       \addlegendentry{Compute roof (400\,MMACs/s)}
 
-      % Connector at the knee (x=4)
-      \addplot[domain=4:4, samples=2, thick, dashed, gray] coordinates {(4,5)(4,400)};
+      % Connector at the knee (x=2, where 200*x meets 400)
+      \addplot[domain=2:2, samples=2, thick, dashed, gray] coordinates {(2,5)(2,400)};
 
-      % Baseline point: OI ~ 0.25, throughput limited to 25 MMACs/s
-      \addplot[only marks, mark=*, mark size=3pt, black] coordinates {(0.25,25)};
-      \node[anchor=west, font=\scriptsize] at (axis cs:0.28,20) {Baseline (32-bit)};
+      % Baseline point: OI ~ 0.25, throughput capped on memory roof at 200*0.25 = 50 MMACs/s
+      \addplot[only marks, mark=*, mark size=3pt, black] coordinates {(0.25,50)};
+      \node[anchor=west, font=\scriptsize] at (axis cs:0.28,40) {Baseline (32-bit)};
 
-      % DSP MAC point: same OI (memory unchanged), slightly better arithmetic
-      \addplot[only marks, mark=triangle*, mark size=3.5pt, black] coordinates {(0.25,33)};
-      \node[anchor=west, font=\scriptsize] at (axis cs:0.28,50) {DSP MAC};
+      % DSP MAC point: same OI (memory unchanged), slightly better arithmetic mapping
+      \addplot[only marks, mark=triangle*, mark size=3.5pt, black] coordinates {(0.25,65)};
+      \node[anchor=west, font=\scriptsize] at (axis cs:0.28,90) {DSP MAC};
 
-      % INT8 point: OI ~ 1.0 (4x more operands per byte), throughput ~100 MMACs/s
-      \addplot[only marks, mark=square*, mark size=3pt, black] coordinates {(1.0,100)};
-      \node[anchor=west, font=\scriptsize] at (axis cs:1.1,100) {INT8 packed};
+      % INT8 point: OI ~ 1.0 (4x more operands per byte), on memory roof at 200*1.0 = 200 MMACs/s
+      \addplot[only marks, mark=square*, mark size=3pt, black] coordinates {(1.0,200)};
+      \node[anchor=west, font=\scriptsize] at (axis cs:1.1,200) {INT8 packed};
     \end{axis}
   \end{tikzpicture}
   \caption{Roofline interpretation of the three accelerator stages on the

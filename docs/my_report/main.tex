@@ -49,25 +49,32 @@
 \setbodymargins
 
 \begin{abstract}
-Sparse matrix--dense matrix multiplication (SpMM) is a key kernel in
+Sparse matrix--dense matrix multiplication (SpMM) is widely used in
 graph neural networks, recommender systems, and compressed neural
-network inference, but it performs poorly on general-purpose processors
-because of irregular memory access and low arithmetic intensity. This
-report presents the design, implementation, and evaluation of a PicoRV32
-RISC-V system-on-chip with a custom hardware accelerator for compressed
-sparse row (CSR) SpMM on the Terasic DE1-SoC Cyclone~V FPGA. The design
-was developed in three optimisation stages: a baseline accelerator with
-tile length ($TN = 8$) parallel MAC lanes across the dense output
-dimension, a DSP-oriented MAC enhancement that maps each lane to a
-dedicated Cyclone~V multiplier-accumulator block, and a runtime
-symmetric INT8 packing stage that stores four quantised operands per
-32-bit RAM word. A 12-case hardware benchmark suite evaluating matrix
-size, dense width, sparsity level, and nonzero pattern was executed in
-firmware on the synthesised SoC, and all cases passed element-by-element
-correctness checks. The final INT8 design achieved a peak speedup of
-$56.80\times$ over the quantised PicoRV32 softcore and $11.92\times$
-over an ARM Cortex-M0 softcore with a $2.87\times$ cycle reduction over
-baseline.
+networks, but it is difficult to accelerate on general-purpose
+processors because sparse data structures create irregular,
+memory-bound access patterns. This project designs, implements, and
+evaluates a custom FPGA accelerator for compressed sparse row (CSR)
+SpMM, integrated into a complete PicoRV32 RISC-V system-on-chip on the
+Terasic DE1-SoC Cyclone~V FPGA.
+
+The system combines a bare-metal RISC-V firmware benchmark harness, a
+64\,KB shared dual-port block RAM, a memory-mapped accelerator
+interface, and a custom tiled MAC datapath. Performance was improved
+through three controlled design stages: a baseline accelerator, a
+DSP-oriented MAC implementation, and a symmetric INT8 packing mode
+that reduces dense operand fetches by storing four 8-bit values per
+32-bit memory word. A 12-case hardware benchmark suite tested matrix
+size, dense width, sparsity, and nonzero pattern, with every case
+passing element-wise correctness checks against a software reference.
+
+The final INT8 design achieved a peak speedup of $56.80\times$ over
+the quantised PicoRV32 baseline and $11.92\times$ over a synthesised
+ARM Cortex-M0 baseline, while reducing accelerator cycles by
+$2.87\times$ relative to the original baseline accelerator. These
+results demonstrate that, for CSR SpMM on a resource-constrained
+embedded FPGA, memory-traffic reduction through INT8 packing provides
+a larger performance gain than DSP arithmetic optimisation alone.
 \end{abstract}
 
 
