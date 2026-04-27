@@ -371,7 +371,11 @@ At the time of the interim report submission, the implementation and integration
   \label{fig:gantt-sem2-actual}
 \end{figure}
 
-The original plan for Semester 2 (Figure \ref{fig:gantt-sem2-planned}) allocated a 32-day window for report writing, spanning approximately from March 23rd to April 25th. However, as illustrated in Figure \ref{fig:gantt-sem2-actual}, the benchmarking and evaluation phases significantly exceeded their projected timelines. This delay necessitated a substantial reduction in the time available for finalizing the report. Consequently, the stretch goal involving custom RISC-V instructions for Sparse Matrix-Vector Multiplication (SpMM) was deprioritized; attempting this implementation would have jeopardized the completion of more critical project milestones.
+The original plan for Semester 2 (Figure \ref{fig:gantt-sem2-planned}) allocated a 32-day window for report writing, spanning
+approximately from March 23rd to April 25th. However, as illustrated in Figure \ref{fig:gantt-sem2-actual}, the benchmarking and
+evaluation phases significantly exceeded their projected timelines. This delay necessitated a substantial reduction in the time available
+for finalizing the report. Consequently, the stretch goal involving custom RISC-V instructions for Sparse Matrix-Dense Matrix Multiplication (SpMM)
+was deprioritized; attempting this implementation would have jeopardized the completion of more critical project milestones.
 
 
 \chapter[Appendix C: Design and Data Archive]{Design and Data Archive}
@@ -417,7 +421,7 @@ The complete project repository is organised as follows:
   \item \texttt{ip/}: third-party IP cores used unmodified, namely the
         PicoRV32 RV32IM soft core (\texttt{ip/picorv32/}) and the
         Cortex-M0 reference source (\texttt{ip/arm\_m0/}) used to derive
-        the Cortex-M0 cycle estimates reported in
+        the Cortex-M0 cycle count reported in
         Table~\ref{tab:cortex-results}.
   \item \texttt{docs/my\_report/}: report \LaTeX\ source, bibliography
         (\texttt{bib/ECS.bib}), figure assets, and chapter files under

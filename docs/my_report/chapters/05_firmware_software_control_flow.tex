@@ -640,11 +640,19 @@ be generalised to modern vector CPUs. The Cortex-M0 comparison is a
 same-platform hardware measurement on the synthesised softcore but uses
 an unoptimised C reference, so it should be read as a second embedded
 baseline rather than a tuned production-software comparison. Other
-limits are that each cycle count is a
-single deterministic run rather than a distribution, the matrices are
-synthetic rather than real workload traces, all data is held in on-chip
-BRAM rather than DRAM, and MMIO/polling overhead is included in the
-accelerator timings.
+limits are that the matrices are synthetic rather than real workload
+traces, all data is held in on-chip BRAM rather than DRAM, and
+MMIO/polling overhead is included in the accelerator timings.
+
+Although the reported figures are not statistical distributions, each
+of the 12 cases was executed five times after reset during
+hardware-level verification, and every repetition produced
+byte-identical outputs and identical CPU and accelerator cycle counts.
+This invariance is consistent with the fully deterministic firmware,
+the fixed single-cycle BRAM latency, and the absence of caches, branch
+prediction, and speculative execution in the SoC, which together
+eliminate the run-to-run variance sources present on general-purpose
+processors.
 
 \section{Critical Evaluation}
 
