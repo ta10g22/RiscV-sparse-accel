@@ -7,7 +7,7 @@ multiplication (SpMM),
 as well as many different storage formats for converting sparse matrices into
 representations that can be operated on efficiently. This chapter provides
 the information needed to understand the context and design decisions taken
-throughout this project, alongside the goals that were set out at the start.
+throughout this project.
 If any of the material that follows is unfamiliar, a more elementary
 overview of SpMM and the CSR format is given in
 Appendix~\ref{app:spmm-background}, and further reading can be pursued
@@ -16,13 +16,26 @@ through the references cited in each section.
 
 The motivation for a dedicated SpMM accelerator is made concrete by the
 sparsity levels that real workloads exhibit. Figure~\ref{fig:sparsity-levels}
-summarises representative density ranges across four workload classes: in
+summarises representative sparsity levels across four workload classes: in
 each case, the fraction of nonzero entries is small enough that storing and
 operating on the matrix in dense form would be wasteful by one to five
 orders of magnitude.
 
 
-\begin{figure}[t]
+
+These sparsity patterns appear in several domains, but the hardware problem is
+similar in each case. GNN layers multiply a sparse adjacency matrix by dense
+feature rows~\citep{graphsage2017, gat2018}; recommender systems apply sparse
+user--item interaction matrices to dense embedding tables~\citep{covington2016youtube};
+scientific solvers repeatedly apply sparse discretisation matrices to blocks of
+vectors; and pruned neural networks execute sparse weight matrices after most
+connections have been removed~\citep{han2016eie}. The common feature is that
+the useful arithmetic is tied to the nonzero structure of $A$, while the dense
+operand $B$ still has to be streamed and accumulated efficiently.
+
+\vspace{1cm}
+
+\begin{figure}[!ht]
   \centering
   \hspace*{-1.5cm}%
   \begin{tikzpicture}
@@ -59,29 +72,16 @@ orders of magnitude.
       };
     \end{axis}
   \end{tikzpicture}
-  \caption{Representative density ranges for matrices encountered in four
-           classes of modern workload. Social and citation graphs in GNN
-           benchmarks such as \texttt{ogbn-arxiv} and \texttt{Reddit} typically
-           have densities below 0.1\%~\citep{graphsage2017}; large-scale
-           recommender interaction matrices are often two orders of magnitude
-           sparser still~\citep{covington2016youtube}. Pruned CNNs sit at the
-           other end of the range, retaining 10--20\% of their weights after
-           aggressive pruning~\citep{han2016eie}. In every case, an SpMM
-           execution model that iterates only over the nonzeros avoids between
-           90\% and $>99.99$\% of the arithmetic that a dense multiply would
-           perform.}
+\caption{Representative density ranges for matrices encountered in four
+         classes of modern workload. Social and citation graphs in GNN
+         benchmarks typically have densities below 0.1\%~\citep{graphsage2017};
+         large-scale recommender interaction matrices are often two orders of
+         magnitude sparser still~\citep{covington2016youtube}. Pruned CNNs
+         retain 10--20\% of their weights after aggressive
+         pruning~\citep{han2016eie}.}
+
   \label{fig:sparsity-levels}
 \end{figure}
-
-These sparsity patterns appear in several domains, but the hardware problem is
-similar in each case. GNN layers multiply a sparse adjacency matrix by dense
-feature rows~\citep{graphsage2017, gat2018}; recommender systems apply sparse
-user--item interaction matrices to dense embedding tables~\citep{covington2016youtube};
-scientific solvers repeatedly apply sparse discretisation matrices to blocks of
-vectors; and pruned neural networks execute sparse weight matrices after most
-connections have been removed~\citep{han2016eie}. The common feature is that
-the useful arithmetic is tied to the nonzero structure of $A$, while the dense
-operand $B$ still has to be streamed and accumulated efficiently.
 
 \section{Why Sparsity Changes the Design Problem}
 \label{sec:sparsity-design-problem}
@@ -92,8 +92,9 @@ Dense matrix multiplication is efficient because it has high operational
 intensity: for an $M \times K \times N$ general matrix multiply (GEMM), many
 floating-point operations (FLOPs) are performed for every byte of data loaded
 from memory, with each operand reused across the $N$ output columns. Sparse
-matrix multiplication breaks this reuse pattern. For a CSR SpMM with $\text{NNZ}$
-nonzeros, the number of useful MACs per byte of CSR index data fetched is
+matrix multiplication breaks this reuse pattern. Let $\mathrm{NNZ}$ denote the
+number of nonzero entries in $A$. For a CSR SpMM, the number of useful MACs per
+byte of CSR index data fetched is
 \[
   \text{OI} = \frac{2 \cdot \text{NNZ} \cdot N}
                    {\text{NNZ} \cdot (4 + 4) + (M + 1) \cdot 4 + \text{NNZ} \cdot 4 \cdot N},
@@ -190,8 +191,10 @@ acceleration.
 \begin{table}[htbp]
   \centering
   \small
-  \setlength{\tabcolsep}{2pt}
-  \begin{tabular}{llp{4.0cm}p{3.5cm}}
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{>{\raggedright\arraybackslash}p{2.6cm}c%
+                  >{\raggedright\arraybackslash}p{4.9cm}%
+                  >{\raggedright\arraybackslash}p{4.5cm}}
   \toprule
   Format & Acronym & Description & Hardware suitability \\
   \midrule
@@ -408,11 +411,7 @@ is capped by the peak arithmetic rate.
     \end{axis}
   \end{tikzpicture}
   \caption{Roofline interpretation of the three accelerator stages on the
-           Cyclone~V platform. The baseline and DSP-enhanced designs sit on
-           the memory-bandwidth roof: arithmetic throughput is capped by
-           operand fetch, so widening the MAC array yields only a small gain.
-           INT8 packing raises the operational intensity by a factor of four
-           (four operands per 32-bit word), shifting the design rightward and
+           Cyclone~V platform. INT8 packing raises the operational intensity by a factor of four, shifting the design rightward and
            upward along the bandwidth roof towards the compute-bound region.}
   \label{fig:roofline}
 \end{figure}

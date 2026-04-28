@@ -1,5 +1,4 @@
-// tb/common/tb_macros.svh
-// Include this file in testbenches for macro definitions
+
 
 `ifndef TB_MACROS_SVH
 `define TB_MACROS_SVH

@@ -1,8 +1,4 @@
-/**
- * Minimal libc stubs for bare-metal firmware
- *
- * GCC may generate calls to memset/memcpy even without -lc
- */
+
 
 #include <stddef.h>
 #include <stdint.h>

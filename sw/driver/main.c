@@ -1,34 +1,21 @@
-/**
- * SpMM Accelerator Benchmark Program
- *
- * Compares CPU software implementation vs hardware accelerator.
- * Displays cycle counts and speedup on 7-segment displays.
- *
- * Designed for PicoRV32 + accelerator SoC on DE1-SoC.
- */
+
 
 #include "spmm_accel.h"
 
-// ============================================================
-// GPIO for LED/7-Segment output
-// ============================================================
-#define GPIO_BASE 0x20000000
-#define GPIO_OUT (*(volatile uint32_t *)(GPIO_BASE + 0x00)) // LEDs/7-seg
-#define GPIO_IN (*(volatile uint32_t *)(GPIO_BASE + 0x04))  // Switches
 
-// ============================================================
-// UART MMIO (simpleuart in soc_top)
-// ============================================================
+#define GPIO_BASE 0x20000000
+#define GPIO_OUT (*(volatile uint32_t *)(GPIO_BASE + 0x00))
+#define GPIO_IN (*(volatile uint32_t *)(GPIO_BASE + 0x04))
+
+
 #define UART_BASE 0x20000100
 #define UART_DIV (*(volatile uint32_t *)(UART_BASE + 0x04))
 #define UART_DATA (*(volatile uint32_t *)(UART_BASE + 0x08))
 
-// 50MHz / 115200 ~= 434
+
 #define UART_DIV_115200 434
 
-// ============================================================
-// Cycle Counter (PicoRV32 CSR)
-// ============================================================
+
 static inline uint32_t read_cycles(void)
 {
     uint32_t cycles;
@@ -90,75 +77,68 @@ void uart_put_speedup_x100(uint32_t speedup_x100)
     uart_putc((char)('0' + (frac % 10)));
 }
 
-// ============================================================
-// 7-Segment Encoding (active low for DE1-SoC)
-// ============================================================
-// Segments: 0gfedcba
+
 static const uint8_t seg7_table[16] = {
-    0x40, // 0
-    0x79, // 1
-    0x24, // 2
-    0x30, // 3
-    0x19, // 4
-    0x12, // 5
-    0x02, // 6
-    0x78, // 7
-    0x00, // 8
-    0x10, // 9
-    0x08, // A
-    0x03, // b
-    0x46, // C
-    0x21, // d
-    0x06, // E
-    0x0E  // F
+    0x40,
+    0x79,
+    0x24,
+    0x30,
+    0x19,
+    0x12,
+    0x02,
+    0x78,
+    0x00,
+    0x10,
+    0x08,
+    0x03,
+    0x46,
+    0x21,
+    0x06,
+    0x0E
 };
 
-// Display 6 hex digits on HEX5:HEX0
-// Format: HEX5:HEX4 = CPU cycles (÷64), HEX3:HEX2 = Accel cycles, HEX1:HEX0 = Speedup
+
 void display_results(uint32_t cpu_cycles, uint32_t accel_cycles, uint32_t speedup)
 {
-    // Divide CPU cycles by 64 to fit in 2 hex digits (0-255 represents 0-16320)
-    uint32_t cpu_scaled = cpu_cycles >> 6; // ÷64
+
+    uint32_t cpu_scaled = cpu_cycles >> 6;
     if (cpu_scaled > 255)
         cpu_scaled = 255;
 
-    // Accel cycles - cap at 255
+
     if (accel_cycles > 255)
         accel_cycles = 255;
 
-    // Speedup - cap at 99
+
     if (speedup > 99)
         speedup = 99;
     uint8_t sp_tens = speedup / 10;
     uint8_t sp_ones = speedup % 10;
 
-    // Pack into GPIO_OUT: bits [23:0] for 6 hex digits
-    // HEX0 = [3:0], HEX1 = [7:4], HEX2 = [11:8], HEX3 = [15:12], HEX4 = [19:16], HEX5 = [23:20]
+
     uint32_t val = 0;
-    val |= (sp_ones & 0xF);                   // HEX0 = speedup ones
-    val |= (sp_tens & 0xF) << 4;              // HEX1 = speedup tens
-    val |= (accel_cycles & 0xF) << 8;         // HEX2 = accel low nibble
-    val |= ((accel_cycles >> 4) & 0xF) << 12; // HEX3 = accel high nibble
-    val |= (cpu_scaled & 0xF) << 16;          // HEX4 = cpu low nibble
-    val |= ((cpu_scaled >> 4) & 0xF) << 20;   // HEX5 = cpu high nibble
+    val |= (sp_ones & 0xF);
+    val |= (sp_tens & 0xF) << 4;
+    val |= (accel_cycles & 0xF) << 8;
+    val |= ((accel_cycles >> 4) & 0xF) << 12;
+    val |= (cpu_scaled & 0xF) << 16;
+    val |= ((cpu_scaled >> 4) & 0xF) << 20;
 
     GPIO_OUT = val;
 }
 
-// Display error code
+
 void display_error(uint8_t code)
 {
-    // Show "EE" on HEX1:HEX0
+
     GPIO_OUT = (0xE << 4) | 0xE | (code << 8);
 }
 
-// ============================================================
-// Runtime Benchmark Suite (generated test matrices)
-// ============================================================
+
 #define MAX_M 64
 #define MAX_K 64
 #define MAX_N 32
-#define MAX_A_NNZ ((MAX_M * MAX_K) / 4) // Supports up to 75% sparsity at 64x64.
+#define MAX_A_NNZ ((MAX_M * MAX_K) / 4)
 #define PACKED_WORDS(count) (((count) + 3u) >> 2)
 
 typedef enum
@@ -174,7 +154,7 @@ typedef struct
     uint32_t M;
     uint32_t K;
     uint32_t N;
-    uint32_t sparsity_pct; // percentage of zeros in A
+    uint32_t sparsity_pct;
     pattern_t pattern;
     uint32_t seed;
 } benchmark_case_t;
@@ -196,7 +176,7 @@ static const benchmark_case_t benchmark_cases[] = {
 
 #define NUM_TESTS ((uint32_t)(sizeof(benchmark_cases) / sizeof(benchmark_cases[0])))
 
-// Runtime-generated matrix storage.
+
 uint32_t A_rowptr[MAX_M + 1];
 uint32_t A_colidx[MAX_A_NNZ];
 int32_t A_values[MAX_A_NNZ];
@@ -478,7 +458,7 @@ uint32_t generate_sparse_A_csr(const benchmark_case_t *tc, uint32_t target_nnz)
             row_cols[filled++] = col;
         }
 
-        // Insertion sort for stable, deterministic CSR colidx ordering.
+
         for (i = 1; i < filled; i++)
         {
             uint32_t key = row_cols[i];
@@ -541,7 +521,7 @@ void compute_speedups(uint32_t cpu_cycles, uint32_t accel_cycles, uint32_t *spee
         uint32_t num = cpu_cycles;
         uint32_t den = accel_cycles;
 
-        // Keep arithmetic 32-bit so bare-metal link does not require __udivdi3.
+
         while (num > (UINT32_MAX / 100u) && den > 1u)
         {
             num >>= 1;
@@ -555,7 +535,7 @@ void compute_speedups(uint32_t cpu_cycles, uint32_t accel_cycles, uint32_t *spee
     }
     else
     {
-        *speedup_x100 = 9999u; // 99.99x sentinel
+        *speedup_x100 = 9999u;
         *speedup_led = 99u;
     }
 }
@@ -587,20 +567,18 @@ void uart_print_result_row(const benchmark_case_t *tc, uint32_t nnz, uint32_t cp
     uart_puts("\n");
 }
 
-// ============================================================
-// Software SpMM (CPU baseline)
-// ============================================================
+
 void spmm_cpu(uint32_t M, uint32_t N, uint32_t K,
               uint32_t *rowptr, uint32_t *colidx, int32_t *values,
               int32_t *B, int32_t *C)
 {
-    // Clear output
+
     for (uint32_t i = 0; i < M * N; i++)
     {
         C[i] = 0;
     }
 
-    // SpMM: C = A * B
+
     for (uint32_t row = 0; row < M; row++)
     {
         uint32_t row_start = rowptr[row];
@@ -611,7 +589,7 @@ void spmm_cpu(uint32_t M, uint32_t N, uint32_t K,
             uint32_t col = colidx[idx];
             int32_t val = values[idx];
 
-            // C[row, :] += val * B[col, :]
+
             for (uint32_t n = 0; n < N; n++)
             {
                 C[row * N + n] += val * B[col * N + n];
@@ -647,9 +625,7 @@ void spmm_cpu_q8(uint32_t M, uint32_t N,
     }
 }
 
-// ============================================================
-// Compare arrays
-// ============================================================
+
 int array_compare(int32_t *a, int32_t *b, int len)
 {
     for (int i = 0; i < len; i++)
@@ -666,9 +642,6 @@ void array_clear(int32_t *arr, int len)
         arr[i] = 0;
 }
 
-// ============================================================
-// Main Entry Point - Benchmark
-// ============================================================
 
 int main(void)
 {
@@ -696,7 +669,7 @@ int main(void)
         int32_t min_b, max_b;
         int pass;
 
-        // Show "888888" while each test is running.
+
         GPIO_OUT = 0x888888;
 
         nnz = generate_case_data(tc);
@@ -718,30 +691,30 @@ int main(void)
         pack_i8_to_u32(A_values_q8, nnz, A_values_q8_packed);
         pack_i8_to_u32(B_matrix_q8, tc->K * tc->N, B_matrix_q8_packed);
 
-        // Full-precision software reference (for quality analysis, untimed).
+
         spmm_cpu(tc->M, tc->N, tc->K, A_rowptr, A_colidx, A_values, B_matrix, C_cpu);
 
-        // CPU baseline in quantized arithmetic domain (fair against INT8 accelerator).
+
         start = read_cycles();
         spmm_cpu_q8(tc->M, tc->N, A_rowptr, A_colidx, A_values_q8, B_matrix_q8, C_cpu_q);
         end = read_cycles();
         cpu_cycles = end - start;
 
-        // Accelerator
+
         start = read_cycles();
         accel_run_spmm_int8(tc->M, tc->N, tc->K, nnz,
                             A_rowptr, A_colidx, A_values_q8_packed, B_matrix_q8_packed, C_accel, 0);
         end = read_cycles();
         accel_cycles = end - start;
 
-        // Compare and report
+
         pass = (array_compare(C_cpu_q, C_accel, (int)(tc->M * tc->N)) == 0);
         if (pass)
             pass_count++;
 
         compute_speedups(cpu_cycles, accel_cycles, &speedup_x100, &speedup_led);
 
-        // Keep board display behavior simple: rounded integer speedup.
+
         display_results(cpu_cycles, accel_cycles, speedup_led);
         uart_print_result_row(tc, nnz, cpu_cycles, accel_cycles, speedup_x100, pass);
     }
@@ -755,7 +728,7 @@ int main(void)
     if (pass_count != NUM_TESTS)
         display_error(0x01);
 
-    // Infinite loop - display stays on
+
     while (1)
         ;
 

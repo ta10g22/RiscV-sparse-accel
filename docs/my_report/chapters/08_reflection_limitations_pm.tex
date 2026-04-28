@@ -50,6 +50,57 @@ deployable design at the end of every stage, rather than accumulating
 partially integrated features, was the practice that kept the overall
 schedule recoverable despite these setbacks.
 
+The project was managed through Git from the first commit, and the
+repository was treated as the single source of truth for both code and
+design artefacts. Over the eight months of development the repository
+accumulated 73 commits spanning every layer of the system: RTL,
+simulation testbenches, firmware, Quartus project files, and the
+report itself. Committing after every measurable change preserved the
+staged optimisation history as a linear, inspectable timeline. The
+baseline accelerator, the DSP-mapped MAC enhancement, and the INT8
+packed mode each appear as identifiable commit clusters that can be
+checked out and rebuilt independently, which is also what makes the
+stage-to-stage cycle reductions in Chapter~\ref{ch:results}
+reproducible. The GitHub remote additionally guarded against local
+hardware loss, which is non-trivial for an FPGA project whose build
+artefacts span Quartus output, firmware ELF files, generated MIF
+files, and synthesis reports. The repository structure is documented
+in Appendix~\ref{app:archive}.
+
+Reading notes and design artefacts were kept in topic-organised
+digital folders on an iPad throughout the project. Separate folders
+held learned concepts (CSR encoding, symmetric quantisation, roofline
+reasoning), initial planning material, top-level SoC block diagrams,
+and FSM chart drafts. Keeping these artefacts in a structured
+collection rather than scattered loose files meant that the freehand
+designs that ultimately fed Figures~\ref{fig:soc-block}
+and~\ref{fig:accel-fsm} remained traceable to their final realisations,
+and that any concept revisited during implementation could be located
+within seconds rather than re-derived from scratch.
+
+The accelerator was deliberately broken into smaller, independently
+testable blocks rather than approached as a single integration effort.
+The control FSM, the parallel MAC datapath, the \texttt{C\_Tile}
+register file, and the MMIO front-end were each implemented and
+unit-tested in isolation before being wired into \texttt{accel\_top}.
+This block-first approach made it possible to make rapid progress on
+each component, contain debugging within a single module hierarchy at
+a time, and only bring the integration testbench into play once each
+block had passed its own directed and constrained-random checks.
+
+For the same reason, full accelerator-level verification was completed
+before the accelerator was integrated into the SoC. The four-tier
+simulation strategy described in Chapter~\ref{ch:methodology}
+(datapath unit, control-FSM unit, accelerator-top, integration) was
+deliberately ordered so that the accelerator was already known-correct
+in isolation before it had to coexist with PicoRV32, the shared BRAM,
+and the firmware. This drastically reduced the failure space when
+bugs surfaced after FPGA programming: a regression in firmware-driven
+runs could immediately be attributed to the integration layer
+(memory map, MMIO sequencing, firmware) rather than the accelerator's
+internal logic, because that logic had been independently certified
+against a software scoreboard.
+
 The overarching lesson is that hardware project timelines are dominated by
 integration and debugging rather than initial design. The Gantt charts in
 Appendix~\ref{app:gantt} record both the original plan and the way the work

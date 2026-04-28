@@ -1,19 +1,9 @@
-// tb/unit/accel_ctrl_tb.sv
-// Compile order (Questa/ModelSim example):
-//   vlog -sv tb/common/tb_pkg.sv
-//   vlog -sv tb/common/clk_reset.sv
-//   vlog -sv rtl/accel_ctrl.sv
-//   vlog -sv tb/unit/accel_ctrl_tb.sv
-// Run:
-//   vsim work.accel_ctrl_tb +TEST=ctrl_smoke +WAVES
-//   run -all
+
 
 `timescale 1ns/1ps
 `include "tb/common/tb_macros.svh"
 
-// ------------------------------------------------------------
-// 1) RAM model module (SYNC read: rdata valid 1 cycle after re)
-// ------------------------------------------------------------
+
 module ram_model_sync #(
   parameter int ADDR_WIDTH = 32,
   parameter int DATA_WIDTH = 32,
@@ -38,7 +28,7 @@ module ram_model_sync #(
     return a[ADDR_WIDTH-1:2];
   endfunction
 
-  // Same-cycle commit for writes
+
   always_ff @(posedge clk) begin
     if (we) begin
       if (addr[1:0] !== 2'b00) begin
@@ -53,7 +43,7 @@ module ram_model_sync #(
     end
   end
 
-  // Sync read: 1-cycle latency - data valid on cycle after re
+
   always_ff @(posedge clk) begin
     if (!n_reset) begin
       re_d   <= 1'b0;
@@ -78,7 +68,7 @@ module ram_model_sync #(
     end
   end
 
-  // TB helpers (hierarchical calls: u_ram.poke_word(...))
+
   task automatic poke_word(input int unsigned word_idx, input logic [DATA_WIDTH-1:0] val);
     if (word_idx >= WORDS) $error("[RAM] poke_word OOB word_idx=%0d", word_idx);
     else mem[word_idx] = val;
@@ -100,9 +90,7 @@ module ram_model_sync #(
 
 endmodule
 
-// ------------------------------------------------------------
-// 2) Datapath stub module
-// ------------------------------------------------------------
+
 module datapath_stub #(
   parameter int DATA_WIDTH = 32
 )(
@@ -120,9 +108,7 @@ module datapath_stub #(
   end
 endmodule
 
-// ------------------------------------------------------------
-// 3) TB top
-// ------------------------------------------------------------
+
 module accel_ctrl_tb;
 
   import tb_pkg::*;
@@ -135,7 +121,7 @@ module accel_ctrl_tb;
   logic clk, n_reset;
   clk_reset u_cr(.clk(clk), .n_reset(n_reset));
 
-  // DUT inputs
+
   logic start_pulse, clear_pulse, irq_en;
 
   logic [31:0] M_reg, N_reg, K_reg, NNZ_reg;
@@ -145,16 +131,16 @@ module accel_ctrl_tb;
   logic relu_en_reg;
   logic [3:0] dtype_reg;
 
-  // DUT outputs
+
   logic status_busy, status_done, irq_out;
 
-  // RAM interface
+
   logic                   ram_re, ram_we;
   logic [ADDR_WIDTH-1:0]  ram_addr;
   logic [DATA_WIDTH-1:0]  ram_wdata;
   logic [DATA_WIDTH-1:0]  ram_rdata;
 
-  // ctrl -> datapath interface
+
   logic                      dp_clear_en;
   logic [$clog2(M_MAX)-1:0]  dp_clear_row;
   logic [$clog2(TN)-1:0]     dp_clear_col;
@@ -178,7 +164,7 @@ module accel_ctrl_tb;
   logic [3:0]                dp_dtype;
   logic [DATA_WIDTH-1:0]     dp_wb_data_out;
 
-  // RAM model
+
   ram_model_sync #(
     .ADDR_WIDTH(ADDR_WIDTH),
     .DATA_WIDTH(DATA_WIDTH),
@@ -193,7 +179,7 @@ module accel_ctrl_tb;
     .rdata  (ram_rdata)
   );
 
-  // Datapath stub
+
   logic [DATA_WIDTH-1:0] forced_ctile_read_data;
   datapath_stub #(.DATA_WIDTH(DATA_WIDTH)) u_dp_stub (
     .ctile_read_en    (dp_ctile_read_en),
@@ -204,7 +190,7 @@ module accel_ctrl_tb;
     .wb_data_out      (dp_wb_data_out)
   );
 
-  // DUT
+
   accel_ctrl #(
     .M_MAX(M_MAX),
     .TN(TN),
@@ -266,16 +252,7 @@ module accel_ctrl_tb;
     .dp_wb_data_out(dp_wb_data_out)
   );
 
-  // ================================================================
-  //  CONCURRENT SVA ASSERTIONS
-  //
-  //  Passive monitors that fire every clock regardless of which test
-  //  is running.  A failing assertion stops simulation and reports
-  //  the time of failure.  These replace the older procedural
-  //  TB_CHECK block and add liveness + mutex coverage.
-  // ================================================================
 
-  // 1) Single-port BRAM — read and write strobes cannot both be high.
   property p_ram_no_simul_rw;
     @(posedge clk) disable iff (!n_reset)
     !(ram_re && ram_we);
@@ -283,7 +260,7 @@ module accel_ctrl_tb;
   ast_ram_no_simul_rw: assert property (p_ram_no_simul_rw)
     else $error("[SVA FAIL] ctrl: ram_re && ram_we at t=%0t", $time);
 
-  // 2) RAM accesses must be 32-bit word-aligned.
+
   property p_ram_addr_aligned;
     @(posedge clk) disable iff (!n_reset)
     (ram_re || ram_we) |-> (ram_addr[1:0] == 2'b00);
@@ -292,7 +269,7 @@ module accel_ctrl_tb;
     else $error("[SVA FAIL] ctrl: unaligned RAM addr=0x%08x at t=%0t",
                 ram_addr, $time);
 
-  // 3) No RAM activity while the core is held in reset.
+
   property p_no_ram_in_reset;
     @(posedge clk)
     !n_reset |-> (!ram_re && !ram_we);
@@ -300,7 +277,7 @@ module accel_ctrl_tb;
   ast_no_ram_in_reset: assert property (p_no_ram_in_reset)
     else $error("[SVA FAIL] ctrl: RAM access during reset at t=%0t", $time);
 
-  // 4) FSM status exclusivity — BUSY and DONE must never coexist.
+
   property p_busy_done_mutex;
     @(posedge clk) disable iff (!n_reset)
     !(status_busy && status_done);
@@ -308,8 +285,7 @@ module accel_ctrl_tb;
   ast_busy_done_mutex: assert property (p_busy_done_mutex)
     else $error("[SVA FAIL] ctrl: busy && done at t=%0t", $time);
 
-  // 5) Liveness — once BUSY asserts it must eventually deassert.
-  //    Catches FSM deadlocks silently hanging simulation.
+
   property p_busy_resolves;
     @(posedge clk) disable iff (!n_reset)
     $rose(status_busy) |-> ##[1:1_000_000] $fell(status_busy);
@@ -318,9 +294,7 @@ module accel_ctrl_tb;
     else $error("[SVA FAIL] ctrl: BUSY never deasserted (FSM deadlock) at t=%0t",
                 $time);
 
-  // 6) Datapath control one-hot — only one of {clear_en, bseg_we, mac_en,
-  //    wb_en} may be active per cycle.  Simultaneous activation would
-  //    imply the FSM has driven conflicting operations into the datapath.
+
   property p_dp_cmd_exclusive;
     @(posedge clk) disable iff (!n_reset)
     ($countones({dp_clear_en, dp_bseg_we, dp_mac_en, dp_wb_en}) <= 1);
@@ -329,7 +303,7 @@ module accel_ctrl_tb;
     else $error("[SVA FAIL] ctrl: multiple dp_* enables asserted at t=%0t",
                 $time);
 
-  // Helpers
+
   task automatic drive_defaults();
     start_pulse = 1'b0;
     clear_pulse = 1'b0;
@@ -370,7 +344,7 @@ module accel_ctrl_tb;
     end
   endtask
 
-  // Test
+
   task automatic test_ctrl_smoke();
     int unsigned timeout;
 
@@ -393,7 +367,7 @@ module accel_ctrl_tb;
     B_base_reg      = 32'h0000_0400;
     out_base_reg    = 32'h0000_0800;
 
-    preload_rowptr_all_zero(rowptr_base_reg, int'(M_reg)); // safe cast
+    preload_rowptr_all_zero(rowptr_base_reg, int'(M_reg));
 
     pulse_start();
 
@@ -416,7 +390,7 @@ module accel_ctrl_tb;
     $display("[PASS] test_ctrl_smoke");
   endtask
 
-  // Main
+
   initial begin
     string testname;
     int seed = get_plusarg_int("SEED", 1);

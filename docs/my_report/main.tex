@@ -6,6 +6,7 @@
 \usepackage[numbers,sort&compress]{natbib}  % Numeric citations, sorted and compressed
 \usepackage{booktabs}          % Professional table rules (\toprule, \midrule, \bottomrule)
 \usepackage{array}             % Extended column types (>{\raggedright\arraybackslash}p{...})
+\usepackage{multirow}          % \multirow for category-grouped tables
 \usepackage{amsmath}           % Math environments and \text{}
 \usepackage{amssymb}           % Extra math symbols
 \usepackage{microtype}         % Better typesetting / line breaking
@@ -66,7 +67,7 @@ through three controlled design stages: a baseline accelerator, a
 DSP-oriented MAC implementation, and a symmetric INT8 packing mode
 that reduces dense operand fetches by storing four 8-bit values per
 32-bit memory word. A 12-case hardware benchmark suite tested matrix
-size, dense width, sparsity, and nonzero pattern, with every case
+size, dense width, sparsity, and nonzero pattern distribution, with every case
 passing element-wise correctness checks against a software reference.
 
 The final INT8 design achieved a peak speedup of $56.80\times$ over

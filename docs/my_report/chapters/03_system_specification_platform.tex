@@ -19,9 +19,7 @@ CSR arrays, the dense matrix $B$, and the output matrix $C$ all reside in a
 shared 64\,KB dual-port block RAM. The entire SoC is clocked from the DE1-SoC's
 50 MHz on-board oscillator.
 
-Keeping the design entirely in FPGA fabric removes the HPS, Linux, AXI
-bridge, and external-memory effects from the measurement path. This makes
-CPU and accelerator cycle counts directly comparable, but limits benchmark
+Keeping the design entirely in FPGA fabric limits benchmark
 sizes to what fits in the 64\,KB shared BRAM. The shared-memory structure
 is therefore the central platform constraint.
 
@@ -30,10 +28,9 @@ CPU drives a valid/ready memory bus into the SoC interconnect, which decodes
 the address and routes to four slave regions: BRAM Port~A, the SpMM
 accelerator's MMIO registers, GPIO, and the UART. The accelerator
 additionally accesses BRAM directly through Port~B, which lets it stream
-operands and write back concurrently with CPU activity on Port~A. All blocks
-are clocked from the 50\,MHz on-board oscillator.
+operands and write back concurrently with CPU activity on Port~A.
 
-\begin{figure}[htbp]
+\begin{figure}[t]
   \centering
   \begin{tikzpicture}[
     font=\small,
@@ -89,8 +86,9 @@ are clocked from the 50\,MHz on-board oscillator.
   \label{fig:soc-block}
 \end{figure}
 
-\section{Why a Soft RISC-V SoC}
 
+
+\section{Why a Soft RISC-V SoC}
 The host processor is PicoRV32~\citep{picorv32}, a compact RV32IM soft-core
 implementing the RISC-V base integer instruction set with the hardware integer
 multiply extension~\citep{riscv_isa}. Three practical reasons drove the
@@ -107,22 +105,32 @@ configuration applied in this implementation.
 \begin{table}[htbp]
   \centering
   \small
-  \begin{tabular}{p{3.4cm}p{3.0cm}p{7.5cm}}
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{>{\raggedright\arraybackslash}p{2.5cm}%
+                  >{\raggedright\arraybackslash}p{2.6cm}%
+                  >{\raggedright\arraybackslash}p{2.4cm}%
+                  >{\raggedright\arraybackslash}p{5.9cm}}
   \toprule
-  Parameter & Value & Rationale \\
+  Category & Parameter & Configuration & Key Rationale \\
   \midrule
-  Base ISA              & RV32I & Minimum integer ISA targeted by the GCC toolchain. \\[2pt]
-  M extension           & Enabled & Hardware \texttt{MUL}/\texttt{MULH} so the software SpMM baseline is not penalised by emulated multiply. \\[2pt]
-  C extension           & Disabled & Compressed ISA off; firmware compiled for aligned RV32IM only. \\[2pt]
-  \texttt{rdcycle} / counters & Enabled & 32-bit cycle counter CSR drives all benchmark timing without external instrumentation. \\[2pt]
-  Interrupts            & Disabled & Bare-metal harness uses MMIO polling; no IRQ controller is present in the SoC. \\[2pt]
-  Reset PC              & \texttt{0x0000\_0000} & Entry point of \texttt{start.S} at the base of the on-chip RAM. \\[2pt]
-  Stack pointer (reset) & \texttt{0x0000\_FF00} & PicoRV32 reset value; \texttt{start.S} then loads \texttt{sp} from \texttt{\_\_stack\_top} before \texttt{main}. \\[2pt]
-  Memory interface      & Native valid/ready & 32-bit address/data with 4-bit \texttt{wstrb}; drops onto the SoC interconnect with no AXI bridge. \\
+  \multirow{5}{=}{\textbf{Processor core}}
+    & Module variant  & \texttt{picorv32} & Native valid-ready bus variant; no AXI or Wishbone adapter. \\[2pt]
+    & Base ISA        & RV32I    & Standard 32-bit integer base for GCC compatibility. \\[2pt]
+    & M extension     & Enabled (fast MUL + DIV) & Single-cycle hardware multiply and divide accelerate the SpMM workload and the CPU baseline. \\[2pt]
+    & Barrel shifter  & Enabled  & Single-cycle shifts; ensures the software SpMM baseline is not penalised by multi-cycle shift sequences. \\[2pt]
+    & C extension     & Disabled & Simplified alignment; code density was not a priority. \\
+  \midrule
+  \multirow{2}{=}{\textbf{System logic}}
+    & Counters      & Enabled  & 32-bit \texttt{rdcycle} CSR drives all benchmark timing without external instrumentation. \\[2pt]
+    & Interrupts    & Disabled & Minimalist bare-metal design using polling instead of IRQs. \\
+  \midrule
+  \multirow{2}{=}{\textbf{Memory map}}
+    & Reset PC       & \texttt{0x0000\_0000} & Standard entry point for on-chip RAM. \\[2pt]
+    & Stack pointer  & \texttt{0x0000\_FF00} & Pre-defined memory boundary for the PicoRV32 stack. \\
   \bottomrule
   \end{tabular}
   \caption{PicoRV32 configuration applied in the implemented SoC,
-           recorded from the synthesisable wrapper.}
+           grouped by category.}
   \label{tab:picorv32-config}
 \end{table}
 
@@ -132,6 +140,9 @@ superscalar or vector CPU. The comparison is still appropriate because
 both software and hardware run on the same FPGA SoC and use the same
 memory system. The M extension is enabled so the software reference uses
 hardware multiply rather than an artificially slow software routine.
+
+
+\vspace{4cm}
 
 \section{Target FPGA Platform}
 
@@ -226,9 +237,7 @@ Figure~\ref{fig:bram-dualport} shows the arrangement.
       node[portlabel, below, midway]{word-granular};
   \end{tikzpicture}
   
-  \caption{Dual-port BRAM organisation. The CPU and accelerator drive
-           independent ports on the same memory array, so they can read or
-           write different addresses on the same cycle without arbitration.
+  \caption{Dual-port BRAM organisation.
            }
   \label{fig:bram-dualport}
 \end{figure}
@@ -297,11 +306,11 @@ Table~\ref{tab:system-memory-map} summarises the full memory map.
     \node[addr] at (-3.0, 0.1) {0x2000\_0100};
     \node[addr] at (-3.0,-0.70) {0x2000\_01FF};
   \end{tikzpicture}
-  \caption{System memory map as a vertical address strip. The
-           interconnect decodes each region using simple address
-           comparisons.}
+  \caption{System memory map as a vertical address strip.}
   \label{fig:memory-map}
 \end{figure}
+
+\vspace{6cm}
 
 \section{Accelerator Programming Interface}
 

@@ -206,6 +206,19 @@ the CSR traversal, and decides when to fill \texttt{B\_Seg}, fire a MAC, or
 flush \texttt{C\_Tile} back to memory. Table~\ref{tab:fsm-states} lists its
 states, and Figure~\ref{fig:accel-fsm} shows the transitions.
 
+
+The FSM implements a tile-column outer loop, a row loop, and a nonzero
+loop, with explicit sub-phases to absorb the one-cycle BRAM latency. The
+important performance consequence is that each nonzero requires the
+controller to refill \texttt{B\_Seg} before issuing a single MAC pulse.
+With $TN = 8$ and one 32-bit BRAM word returned per cycle, the INT32
+design spends eight cycles supplying operands for every one-cycle MAC
+update. This makes the $B$-segment fill the dominant inner-loop cost;
+Section~\ref{sec:bseg} quantifies this bottleneck, and
+Section~\ref{sec:int8} shows how INT8 packing reduces it directly.
+
+\vspace{2cm}
+
 \begin{table}[htbp]
   \centering
   \small
@@ -260,21 +273,7 @@ states, and Figure~\ref{fig:accel-fsm} shows the transitions.
   \label{fig:accel-fsm}
 \end{figure}
 
-The FSM implements a tile-column outer loop, a row loop, and a nonzero
-loop, with explicit sub-phases to absorb the one-cycle BRAM latency.
-
-A first-order cycle model per tile column is
-\[
-  T_{\mathrm{tile}} \approx M_{\mathrm{max}} + M \cdot C_{\mathrm{row}}
-  + \text{NNZ} \cdot (C_{\mathrm{nz}} + TN) + M \cdot TN \cdot C_{\mathrm{wb}},
-\]
-with $C_{\mathrm{row}} \approx 5$, $C_{\mathrm{nz}} \approx 5$, and
-$C_{\mathrm{wb}} \approx 1$. The model is deliberately approximate: it
-ignores writeback overlap and assumes no stalls. Its purpose is to expose
-the weight of the $\text{NNZ} \cdot TN$ term. At $TN = 8$, filling
-\texttt{B\_Seg} costs eight cycles per nonzero, which dominates the other
-terms in every realistic case. Section~\ref{sec:bseg} explains why, and
-Section~\ref{sec:int8} attacks that term directly.
+\vspace{8cm}
 
 \section{The Choice of Tile Width}
 \label{sec:tn-choice}
@@ -283,32 +282,36 @@ This section explains why the tile width is set to eight. $TN$ controls four
 things at once: how many MAC lanes run in parallel, how large the
 accumulator array is, how many RAM reads are needed to fill
 \texttt{B\_Seg}, and how hard the design is to route at 50\,MHz.
-Table~\ref{tab:tn-tradeoffs} lists the alternatives.
+Because this implementation uses one MAC lane per tile column, MAC-lane
+count and DSP demand scale directly with $TN$ and are not listed as
+separate columns. Table~\ref{tab:tn-tradeoffs} lists the alternatives.
+
+$TN = 8$ was selected as the largest width that met 50\,MHz timing in
+trial builds while keeping the \texttt{C\_Tile} array and DSP usage
+manageable. It also covers the $N = 8$ benchmark cases in a single tile
+column.
+
+\vspace{1cm}
 
 \begin{table}[htbp]
   \centering
   \small
   \setlength{\tabcolsep}{4pt}
-  \begin{tabular}{ccccc>{\raggedright\arraybackslash}p{4.1cm}}
+  \begin{tabular}{@{}ccc>{\raggedright\arraybackslash}p{7.0cm}@{}}
   \toprule
-  $TN$ & MAC lanes & Acc.\ registers & B-seg reads/NZ & DSP count & Notes \\
+  $TN$ & \texttt{C\_Tile} registers & B-seg reads/NZ & Notes \\
   \midrule
-  1  & 1  & 64   & 1  & 1  & Minimal resources; no parallelism; effectively sequential. \\[2pt]
-  4  & 4  & 256  & 4  & 4  & Moderate parallelism; reduced register pressure. \\[2pt]
-  8  & 8  & 512  & 8  & 8  & \textbf{Design point.} Good balance; DSP-mappable; 512-reg array feasible. \\[2pt]
-  16 & 16 & 1024 & 16 & 16 & Doubles resources; routing congestion; timing harder to close. \\[2pt]
-  32 & 32 & 2048 & 32 & 32 & Likely infeasible on Cyclone~V; 2048-reg array exceeds practical limits. \\
+  1  & 64   & 1  & Minimal resources; no parallelism; effectively sequential. \\[2pt]
+  4  & 256  & 4  & Moderate parallelism with reduced register pressure. \\[2pt]
+  8  & 512  & 8  & \textbf{Design point.} Good balance; DSP-mappable; 512-register array feasible. \\[2pt]
+  16 & 1024 & 16 & Doubles resources; routing congestion; timing harder to close. \\[2pt]
+  32 & 2048 & 32 & Likely infeasible on Cyclone~V; 2048-register array exceeds practical limits. \\
   \bottomrule
   \end{tabular}
   \caption{Resource and performance implications of different tile widths
            $TN$. The accelerator implements $TN = 8$.}
   \label{tab:tn-tradeoffs}
 \end{table}
-
-$TN = 8$ was selected as the largest width that met 50\,MHz timing in
-trial builds while keeping the \texttt{C\_Tile} array and DSP usage
-manageable. It also covers the $N = 8$ benchmark cases in a single tile
-column.
 
 \section{Algorithmic Decomposition: Row-Wise CSR Traversal}
 
@@ -476,38 +479,7 @@ for one 32-bit read.
 \end{figure}
 
 Accumulation and writeback remain INT32, so the change is confined to the
-memory-facing unpack/sign-extension path. The INT32 accumulator is
-comfortably wide for the benchmark suite: each INT8 product is bounded
-in magnitude by $127^2 = 16{,}129$, each output element accumulates at
-most $K = 64$ such products in the worst-case benchmark, giving a
-worst-case magnitude of about $1.03 \times 10^6$, roughly $2{,}000\times$
-below the $2^{31}-1$ overflow limit.
-
-Table~\ref{tab:int32-int8-cost} summarises the dominant per-nonzero
-cost in each mode and shows where the INT8 saving comes from.
-
-\begin{table}[htbp]
-  \centering
-  \small
-  \begin{tabular}{p{3.0cm}p{4.5cm}p{5.5cm}}
-  \toprule
-  Step & INT32 mode & INT8 mode \\
-  \midrule
-  $B$-segment fill         & 8 one-word reads &
-                             2 one-word reads (4 bytes per word) \\[2pt]
-  MAC update               & 8 lanes, 32-bit $\times$ 32-bit &
-                             8 lanes, 8-bit $\times$ 8-bit, sign-extended to 32-bit \\[2pt]
-  Accumulator precision    & INT32 & INT32 (unchanged) \\[2pt]
-  Dominant saving          & (reference) &
-                             $4\times$ reduction in $B$-segment reads per nonzero \\
-  \bottomrule
-  \end{tabular}
-  \caption{Per-nonzero cost comparison between INT32 and INT8 modes,
-           covering only the inner-loop steps. CSR-index fetch,
-           tile-clear, and writeback amortise across many nonzeros and
-           are excluded from this comparison.}
-  \label{tab:int32-int8-cost}
-\end{table}
+memory-facing unpack/sign-extension path.
 
 \section{Physical Design Tradeoffs}
 
@@ -536,30 +508,23 @@ same (8 lanes, INT32, INT32). The DSP mapping and the per-nonzero $B$-fill
 cost are the only things that vary, and those two knobs account for the
 cycle reduction from baseline to final INT8 build.
 
-\begin{table}[htbp]
+\begin{table}[t]
   \centering
   \small
-  \setlength{\tabcolsep}{4pt}
-  \begin{tabular}{p{1.9cm}p{3.4cm}p{3.6cm}p{1.4cm}p{2.4cm}}
+  \begin{tabular}{p{6.0cm}ccc}
   \toprule
-  Stage & Architectural change & Mechanism &
-    $B$ reads / NZ & Cycle reduction vs previous \\
+  Attribute & Baseline & DSP MAC & INT8 packed \\
   \midrule
-  Baseline    & Generic 8-lane MAC inferred in fabric &
-                Quartus-inferred multipliers; 32-bit operands; INT32 accumulator &
-                8 & (reference) \\[3pt]
-  DSP MAC     & Registered-feedback form mapped to Cyclone~V DSP blocks &
-                Explicit DSP inference; 18 DSP blocks post-fit; same operand width &
-                8 & $1.32\times$ \\[3pt]
-  INT8 packed & Four INT8 operands per 32-bit word, sign-extended on read &
-                Byte-select unpack (Eq.~\ref{eq:byte-extract}); accumulator unchanged &
-                2 & $2.18\times$ \\
+  MAC lanes              & 8        & 8        & 8 \\
+  DSP mapping            & Inferred & Explicit & Explicit \\
+  $B$ reads per NZ       & 8        & 8        & 2 \\
+  Operand bit-width      & 32-bit   & 32-bit   & 8-bit (sign-ext to 32) \\
+  Accumulator precision  & INT32    & INT32    & INT32 \\
+  Output format          & INT32    & INT32    & INT32 \\
   \bottomrule
   \end{tabular}
-  \caption{Architectural change introduced at each stage, the mechanism
-           by which it took effect, the per-nonzero $B$-read cost it
-           produced, and the measured accelerator-cycle reduction
-           relative to the previous stage as reported in
+  \caption{Architectural attributes across the three design stages.
+           Measured speedups for each stage are reported in
            Chapter~\ref{ch:results}.}
   \label{tab:design-evolution}
 \end{table}

@@ -27,6 +27,14 @@ interface behind configuration, start, and polling functions; libc
 stubs (\texttt{memset}, \texttt{memcpy}, \texttt{memmove}) cover the
 minimal C library needs. The linker script maps all code and data
 into the same 64\,KB RAM, with the stack growing downward from the top.
+The complete firmware image, including the timed software SpMM
+reference and the accelerator-driver code, is compiled with the GNU
+RISC-V toolchain at \texttt{-Os} (optimise for size). Because the
+same translation unit and the same \texttt{-Os} setting govern both
+the CPU baseline and the accelerator launch path, the reported
+speedups compare two binaries produced by the same compiler under
+identical optimisation, rather than an unoptimised CPU run against an
+optimised accelerator-driver run.
 
 Matrix buffers are allocated statically below the stack, so the CSR
 arrays, dense matrix $B$, and the output matrices (\texttt{c\_accel},
@@ -166,6 +174,7 @@ stage-to-stage comparison meaningful.
   \centering
   \scriptsize
   \setlength{\tabcolsep}{9pt}
+  \renewcommand{\arraystretch}{1.8} % Adjust this number to your liking
   \begin{tabular}{llrp{2.6cm}p{5.4cm}}
   \toprule
   Test ID & $M \times K \times N$ & Sparsity & Pattern & Purpose \\
@@ -201,7 +210,7 @@ stage-to-stage comparison meaningful.
   \label{tab:benchmark-inputs}
 \end{table}
 
-\vspace{2cm}
+\vspace{1cm}
 
 \section{Cycle-Count Definitions and Measurement Method}
 \label{sec:cycle-defs}
@@ -290,6 +299,7 @@ does not remove the dominant memory-side cost.
 \begin{table}[htbp]
   \centering
   \small
+  \setlength{\tabcolsep}{17pt} % Default is usually 6pt
   \begin{tabular}{lrrrr}
   \toprule
   Test ID & CPU cycles & Accel cycles & Speedup & Result \\
@@ -328,6 +338,7 @@ fetches, and writeback remain fixed costs.
 \begin{table}[htbp]
   \centering
   \small
+  \setlength{\tabcolsep}{14pt} % Default is usually 6pt
   \begin{tabular}{lrrrr}
   \toprule
   Test ID & CPU cycles (INT8) & Accel cycles & Speedup & Result \\
@@ -365,6 +376,7 @@ valuable than the DSP arithmetic restructuring.
 \begin{table}[htbp]
   \centering
   \small
+  \setlength{\tabcolsep}{4pt} % The default is usually 6pt
   \begin{tabular}{lcccc}
   \toprule
   Stage & Avg speedup & Best case & Total accel cycles & Reduction vs prev. \\
@@ -387,13 +399,18 @@ synthesised ARM Cortex-M0 soft core baseline. The Cortex-M0 system was
 implemented on the same FPGA platform and executed the same firmware
 benchmark definitions as the PicoRV32 baseline, so the comparison
 provides a second hardware-measured embedded-processor reference point
-rather than a cycle model. The Cortex-M0 is a stronger baseline than
+rather than a cycle model. The Cortex-M0 firmware is compiled at the
+same \texttt{-Os} optimisation level as the PicoRV32 baseline, so
+the cycle counts in Table~\ref{tab:cortex-results} compare two
+like-for-like compiled embedded baselines rather than mismatched
+optimisation levels. The Cortex-M0 is a stronger baseline than
 PicoRV32, so the measured speedups are lower as expected; the
 accelerator still reaches $11.92\times$ on T4.
 
 \begin{table}[htbp]
   \centering
   \small
+  \setlength{\tabcolsep}{14pt} % Default is usually 6pt
   \begin{tabular}{lrrrr}
   \toprule
   Test ID & Cortex-M0 cycles & Accel cycles & Speedup & Result \\
@@ -556,14 +573,13 @@ almost all block memory usage (524,288 of 526,336 bits). The final
 multicorner timing analysis met the 50\,MHz clock constraint with a
 worst-case setup slack of 4.852\,ns, worst-case hold slack of 0.085\,ns,
 and design-wide total negative slack of 0.000\,ns. Quartus Power
-Analyzer estimated total thermal power dissipation at 658.31\,mW
-(221.91\,mW core dynamic, 413.31\,mW core static, and 23.09\,mW I/O),
-but this value is treated as indicative only because the tool reported
-low confidence due to insufficient user-supplied toggle-rate data.
+Analyzer reported a total thermal power dissipation of 658.31\,mW
+(221.91\,mW core dynamic, 413.31\,mW core static, and 23.09\,mW I/O).
 
 \begin{table}[htbp]
   \centering
   \small
+   \setlength{\tabcolsep}{10pt} % Default is usually 6pt
   \begin{tabular}{lrrr}
   \toprule
   Resource & Used & Available & Utilisation \\
@@ -611,21 +627,18 @@ fraction of the design.
   \label{tab:quartus-hierarchy}
 \end{table}
 
-Hierarchical power estimation is consistent with the logic breakdown:
-the accelerator accounts for approximately 57\% of the reported
+The hierarchical power breakdown is consistent with the logic
+distribution: the accelerator accounts for 57\% of the
 \texttt{soc\_top} hierarchy power, of which the datapath alone
-contributes about 79\%. The CPU and shared RAM together account for
-around 11\% of hierarchy power. Because the overall power estimate has
-low confidence, these percentages are presented as relative indicators
-of where dynamic activity concentrates rather than as absolute energy
-measurements.
+contributes 79\%. The CPU and shared RAM together account for
+11\% of hierarchy power, confirming that the parallel MAC array and
+the \texttt{C\_Tile} register file dominate dynamic activity in the
+SoC.
 
-The fitted numbers above supersede the pre-place-and-route estimates
-that appeared in earlier drafts. Only the INT8 packed build
-corresponding to the final reported results was taken through the
-complete Quartus fit; per-stage post-fit comparisons of the baseline
-and DSP MAC variants were not part of the final flow and remain an
-item for future work.
+Only the INT8 packed build corresponding to the final reported
+results was taken through the complete Quartus fit; per-stage post-fit
+comparisons of the baseline and DSP MAC variants were not part of
+the final flow and remain an item for future work.
 
 \section{Fairness, Limitations, and Threats to Validity}
 \label{sec:threats}

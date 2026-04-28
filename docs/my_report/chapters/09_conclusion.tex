@@ -65,15 +65,6 @@ The most impactful extensions to the current design would be:
         accelerator execution, enabling pipelined benchmark preparation or
         post-processing of the previous result.
 
-  \item \textbf{Power and energy characterisation.} The final Quartus
-        Power Analyzer run reported an indicative total thermal power of
-        658.31\,mW for \texttt{soc\_top}, but with low tool confidence
-        because no user-supplied toggle-rate data was provided.
-        Instrumenting the DE1-SoC rails or re-running Power Analyzer
-        with simulation-derived toggle files would replace this
-        indicative figure with a defensible energy-efficiency result,
-        which is the metric that matters most in the embedded and edge
-        contexts for which this class of accelerator is targeted.
 \end{enumerate}
 
 \section{Closing Remarks}

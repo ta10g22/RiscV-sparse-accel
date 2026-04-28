@@ -1,62 +1,38 @@
 `timescale 1ns / 1ps
-// ============================================================
-// soc_top.sv - Top-level SoC for DE1-SoC FPGA
-// ============================================================
-// PicoRV32 + SpMM Accelerator + On-chip RAM
-// 
-// Memory Map:
-//   0x0000_0000 - 0x0000_FFFF : RAM (64KB)
-//   0x1000_0000 - 0x1000_00FF : SpMM Accelerator MMIO
-//   0x2000_0000 - 0x2000_000F : GPIO (LEDs, Switches)
-//   0x2000_0100 - 0x2000_01FF : UART MMIO (external USB-to-TTL on GPIO pins)
-// ============================================================
 
 module soc_top #(
   parameter M_MAX      = 64,
   parameter TN         = 8,
-  parameter RAM_SIZE   = 65536,  // 64KB
-  parameter MEM_INIT   = ""      // Optional MIF file for init
+  parameter RAM_SIZE   = 65536,
+  parameter MEM_INIT   = ""
 )(
   input  logic        clk_50mhz,
   input  logic        n_reset,
-  
-  // LEDs
+
   output logic [9:0]  led,
-  
-  // Switches
+
   input  logic [9:0]  sw,
-  
-  // Push buttons (directly usable, active low)
-  // Note: KEY[0] is used for n_reset, so only KEY[3:1] available
+
   input  logic [3:1]  key,
-  
-  // 7-Segment (directly usable) - active low
+
   output logic [6:0]  hex0,
   output logic [6:0]  hex1,
   output logic [6:0]  hex2,
   output logic [6:0]  hex3,
   output logic [6:0]  hex4,
   output logic [6:0]  hex5,
-  
-  // UART (directly usable GPIO)
+
   output logic        uart_tx,
   input  logic        uart_rx
 );
 
-  // ============================================================
-  // Parameters
-  // ============================================================
   localparam ADDR_WIDTH = 32;
   localparam DATA_WIDTH = 32;
-  
-  // ============================================================
-  // Internal Signals
-  // ============================================================
+
   logic        clk;
   logic        rst_n;
   logic [2:0]  reset_sync;
-  
-  // PicoRV32 memory interface
+
   logic        mem_valid;
   logic        mem_instr;
   logic        mem_ready;
@@ -64,33 +40,28 @@ module soc_top #(
   logic [31:0] mem_wdata;
   logic [3:0]  mem_wstrb;
   logic [31:0] mem_rdata;
-  
-  // Address decode
+
   logic        sel_ram;
   logic        sel_accel;
   logic        sel_gpio;
   logic        sel_uart;
-  
-  // RAM signals
+
   logic [31:0] ram_rdata;
   logic        ram_ready;
-  
-  // Accelerator signals
+
   logic [31:0] accel_rdata;
   logic        accel_ready;
-  logic [31:0] accel_mem_addr;    // Single address for read/write
+  logic [31:0] accel_mem_addr;
   logic [31:0] accel_mem_rdata;
   logic        accel_mem_re;
   logic [31:0] accel_mem_wdata;
   logic        accel_mem_we;
   logic [3:0]  accel_led;
-  
-  // GPIO signals
+
   logic [31:0] gpio_rdata;
   logic        gpio_ready;
   logic [31:0] gpio_out_reg;
 
-  // UART signals
   logic [31:0] uart_rdata;
   logic        uart_ready;
   logic        uart_bad_addr;
@@ -100,13 +71,9 @@ module soc_top #(
   logic        simpleuart_reg_dat_sel;
   logic [31:0] simpleuart_reg_dat_do;
   logic        simpleuart_reg_dat_wait;
-  
-  // ============================================================
-  // Clock and Reset
-  // ============================================================
+
   assign clk = clk_50mhz;
-  
-  // Synchronize reset (active-low button)
+
   always_ff @(posedge clk or negedge n_reset) begin
     if (!n_reset) begin
       reset_sync <= 3'b000;
@@ -115,26 +82,15 @@ module soc_top #(
     end
   end
   assign rst_n = reset_sync[2];
-  
-  // ============================================================
-  // Address Decode
-  // ============================================================
-  // RAM:   0x0000_0000 - 0x0000_FFFF
-  // Accel: 0x1000_0000 - 0x1000_00FF
-  // GPIO:  0x2000_0000 - 0x2000_000F
-  // UART:  0x2000_0100 - 0x2000_01FF
+
   assign sel_ram   = (mem_addr[31:16] == 16'h0000);
   assign sel_accel = (mem_addr[31:8]  == 24'h100000);
   assign sel_gpio  = (mem_addr[31:4]  == 28'h2000000);
   assign sel_uart  = (mem_addr[31:8]  == 24'h200001);
 
-  // simpleuart register map:
-  //   +0x04 : divider register
-  //   +0x08 : data register
   assign simpleuart_reg_div_sel = mem_valid && sel_uart && (mem_addr[7:0] == 8'h04);
   assign simpleuart_reg_dat_sel = mem_valid && sel_uart && (mem_addr[7:0] == 8'h08);
 
-  // Return ready with zero on unmapped offsets in UART window.
   assign uart_bad_addr = mem_valid && sel_uart && !simpleuart_reg_div_sel && !simpleuart_reg_dat_sel;
   assign uart_ready = simpleuart_reg_div_sel ||
                       (simpleuart_reg_dat_sel && !simpleuart_reg_dat_wait) ||
@@ -148,10 +104,7 @@ module soc_top #(
     else
       uart_rdata = 32'h0000_0000;
   end
-  
-  // ============================================================
-  // PicoRV32 CPU
-  // ============================================================
+
   picorv32 #(
     .ENABLE_COUNTERS      (1),
     .ENABLE_COUNTERS64    (0),
@@ -191,8 +144,7 @@ module soc_top #(
     .mem_wdata    (mem_wdata),
     .mem_wstrb    (mem_wstrb),
     .mem_rdata    (mem_rdata),
-    
-    // Unused interfaces
+
     .mem_la_read  (),
     .mem_la_write (),
     .mem_la_addr  (),
@@ -214,10 +166,7 @@ module soc_top #(
     .trace_valid  (),
     .trace_data   ()
   );
-  
-  // ============================================================
-  // Memory Ready and Read Data Mux
-  // ============================================================
+
   assign mem_ready = (sel_ram   && ram_ready)   ||
                      (sel_accel && accel_ready) ||
                      (sel_gpio  && gpio_ready)  ||
@@ -235,31 +184,21 @@ module soc_top #(
     else
       mem_rdata = 32'hDEAD_BEEF;
   end
-  
-  // ============================================================
-  // On-Chip RAM (64KB) - True Dual-Port using altsyncram
-  // ============================================================
-  // Port A: CPU (read/write with byte enables)
-  // Port B: Accelerator (read/write, full words only)
-  // Using explicit altsyncram instantiation for reliable Block RAM inference
-  
+
   logic        ram_read_pending;
   logic [31:0] ram_rdata_reg;
   logic [31:0] accel_rdata_reg;
-  
-  // Port A signals (directly from CPU)
+
   wire [13:0] ram_addr_a = mem_addr[15:2];
   wire [31:0] ram_wdata_a = mem_wdata;
   wire [3:0]  ram_byteena_a = mem_wstrb;
   wire        ram_wren_a = mem_valid && sel_ram && |mem_wstrb && !accel_mem_we;
   wire        ram_rden_a = mem_valid && sel_ram && ~|mem_wstrb;
-  
-  // Port B signals (from accelerator)  
+
   wire [13:0] ram_addr_b = accel_mem_addr[15:2];
   wire [31:0] ram_wdata_b = accel_mem_wdata;
   wire        ram_wren_b = accel_mem_we;
-  
-  // Instantiate true dual-port RAM using altsyncram
+
   altsyncram #(
     .operation_mode       ("BIDIR_DUAL_PORT"),
     .width_a              (32),
@@ -294,7 +233,6 @@ module soc_top #(
     .byteena_b   (1'b1),
     .wren_b      (ram_wren_b),
     .q_b         (accel_rdata_reg),
-    // Unused ports
     .aclr0       (1'b0),
     .aclr1       (1'b0),
     .addressstall_a (1'b0),
@@ -308,8 +246,7 @@ module soc_top #(
     .rden_a      (1'b1),
     .rden_b      (1'b1)
   );
-  
-  // RAM ready signal (1 cycle latency)
+
   always_ff @(posedge clk) begin
     if (!rst_n) begin
       ram_read_pending <= 1'b0;
@@ -321,10 +258,7 @@ module soc_top #(
   assign ram_rdata = ram_rdata_reg;
   assign accel_mem_rdata = accel_rdata_reg;
   assign ram_ready = ram_read_pending;
-  
-  // ============================================================
-  // SpMM Accelerator
-  // ============================================================
+
   accel_top #(
     .M_MAX      (M_MAX),
     .TN         (TN),
@@ -333,8 +267,7 @@ module soc_top #(
   ) u_accel (
     .clk        (clk),
     .n_reset    (rst_n),
-    
-    // MMIO interface
+
     .mmio_addr  ({24'h0, mem_addr[7:0]}),
     .mmio_wdata (mem_wdata),
     .mmio_we    (sel_accel && mem_valid && (mem_wstrb != 4'b0000)),
@@ -343,34 +276,29 @@ module soc_top #(
     .mmio_valid (sel_accel && mem_valid),
     .mmio_rdata (accel_rdata),
     .mmio_ready (accel_ready),
-    
-    // Memory interface (Port B of RAM)
+
     .ram_addr   (accel_mem_addr),
     .ram_rdata  (accel_mem_rdata),
     .ram_re     (accel_mem_re),
     .ram_wdata  (accel_mem_wdata),
     .ram_we     (accel_mem_we),
-    
-    // Status
+
     .led        (accel_led),
-    .irq        ()  // Not used
+    .irq        ()
   );
-  
-  // ============================================================
-  // GPIO: LEDs, Switches, 7-Segment
-  // ============================================================
+
   logic gpio_pending;
-  
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       gpio_out_reg <= 32'h0;
       gpio_pending <= 1'b0;
     end else begin
       gpio_pending <= 1'b0;
-      
+
       if (mem_valid && sel_gpio && !gpio_ready) begin
         case (mem_addr[3:2])
-          2'b00: begin  // GPIO_OUT (LEDs/7-seg)
+          2'b00: begin
             if (|mem_wstrb) begin
               if (mem_wstrb[0]) gpio_out_reg[7:0]   <= mem_wdata[7:0];
               if (mem_wstrb[1]) gpio_out_reg[15:8]  <= mem_wdata[15:8];
@@ -379,11 +307,11 @@ module soc_top #(
             end
             gpio_rdata <= gpio_out_reg;
           end
-          2'b01: begin  // GPIO_IN (Switches)
+          2'b01: begin
             gpio_rdata <= {22'h0, sw};
           end
-          2'b10: begin  // GPIO_IN (Keys)
-            gpio_rdata <= {29'h0, key};  // key[3:1] only, key[0] = reset
+          2'b10: begin
+            gpio_rdata <= {29'h0, key};
           end
           default: begin
             gpio_rdata <= 32'h0;
@@ -393,15 +321,12 @@ module soc_top #(
       end
     end
   end
-  
+
   assign gpio_ready = gpio_pending;
-  
-  // LED output: lower 6 bits from GPIO, upper 4 from accelerator status
+
   assign led[5:0] = gpio_out_reg[5:0];
   assign led[9:6] = accel_led;
-  
-  // 7-Segment display (directly active low)
-  // Show lower 8 bits of GPIO register as hex
+
   function automatic [6:0] hex_decode(input [3:0] val);
     case (val)
       4'h0: hex_decode = 7'b1000000;
@@ -430,11 +355,8 @@ module soc_top #(
   assign hex4 = hex_decode(gpio_out_reg[19:16]);
   assign hex5 = hex_decode(gpio_out_reg[23:20]);
 
-  // ============================================================
-  // UART (simpleuart from PicoSoC)
-  // ============================================================
   simpleuart #(
-    .DEFAULT_DIV (434)  // 50MHz / 115200 ~= 434
+    .DEFAULT_DIV (434)
   ) u_uart (
     .clk         (clk),
     .resetn      (rst_n),

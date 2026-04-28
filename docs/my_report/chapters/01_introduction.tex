@@ -11,7 +11,7 @@ step, in which a sparse adjacency matrix is multiplied against a dense
 feature matrix~\citep{graphsage2017, gat2018}. In large-scale recommender
 systems, collaborative filtering relies on sparse user--item interaction
 matrices whose dimensions can reach hundreds of millions of
-rows~\citep{covington2016youtube}. In scientific simulation it is the
+rows~\citep{covington2016youtube}. In scientific simulation, it is the
 inner loop of iterative solvers for finite-element and finite-difference
 discretisations. The same pattern appears in transformer attention with
 sparse masks and in the weight-matrix multiply step of pruned and
@@ -73,7 +73,7 @@ are discussed as future work in Chapter~\ref{ch:conclusion}.
 The remainder of this report is structured as follows.
 Chapter~\ref{ch:motivation} reviews the background needed to justify the
 design choices, covering SpMM workloads, sparse data formats, prior
-accelerator work, the rationale for FPGAs, and the INT8 bandwidth argument.
+accelerator work and the rationale for FPGAs.
 Chapter~\ref{ch:platform} defines the implemented SoC platform and its
 memory-mapped I/O interface. Chapter~\ref{ch:design} presents the
 accelerator architecture and each optimisation step in detail.

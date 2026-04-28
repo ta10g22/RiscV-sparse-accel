@@ -1,7 +1,5 @@
 `timescale 1ns/1ps
 
-// top level of the accelerator responsible for the inputs and outputs and
-// connections throughout the accelerator
 
 module accel_top #(
     parameter int M_MAX       = 64,
@@ -31,7 +29,7 @@ module accel_top #(
     output logic                     irq
 );
 
-    // MMIO offsets (byte offsets)
+
     localparam logic [ADDR_WIDTH-1:0] CTRL_OFFSET       = 32'h00;
     localparam logic [ADDR_WIDTH-1:0] STATUS_OFFSET     = 32'h04;
     localparam logic [ADDR_WIDTH-1:0] M_OFFSET          = 32'h08;
@@ -44,7 +42,7 @@ module accel_top #(
     localparam logic [ADDR_WIDTH-1:0] C_BASE_OFFSET     = 32'h24;
     localparam logic [ADDR_WIDTH-1:0] NNZ_OFFSET        = 32'h28;
 
-    // CTRL/STATUS bitfields
+
     localparam int CTRL_START_BIT  = 0;
     localparam int CTRL_CLEAR_BIT  = 1;
     localparam int CTRL_IRQ_EN_BIT = 2;
@@ -54,7 +52,7 @@ module accel_top #(
     localparam int STATUS_BUSY_BIT = 0;
     localparam int STATUS_DONE_BIT = 1;
 
-    // MMIO registers (config only)
+
     logic [DATA_WIDTH-1:0] ctrl_reg;
     logic [DATA_WIDTH-1:0] M_reg, N_reg, K_reg;
     logic [DATA_WIDTH-1:0] A_val_base_reg;
@@ -64,12 +62,12 @@ module accel_top #(
     logic [DATA_WIDTH-1:0] C_base_reg;
     logic [DATA_WIDTH-1:0] NNZ_reg;
 
-    // internal signals
+
     logic start_pulse, clear_pulse;
     logic status_busy, status_done;
     logic irq_out, irq_en;
 
-    // control to datapath wires
+
     logic                      dp_clear_en;
     logic [$clog2(M_MAX)-1:0]  dp_clear_row;
     logic [$clog2(TN)-1:0]     dp_clear_col;
@@ -93,15 +91,15 @@ module accel_top #(
     logic [3:0]                dp_dtype;
     logic [DATA_WIDTH-1:0]     dp_wb_data_out;
 
-    // constants / simple wiring
+
     assign mmio_ready = 1'b1;
     assign irq_en     = ctrl_reg[CTRL_IRQ_EN_BIT];
     assign irq        = irq_out;
 
-    // LEDs: ON when busy, OFF when not
+
     assign led = {3'b000, status_busy};
 
-    // update MMIO config registers
+
     always_ff @(posedge clk or negedge n_reset) begin
         if (!n_reset) begin
             ctrl_reg       <= '0;
@@ -130,12 +128,12 @@ module accel_top #(
                 B_BASE_OFFSET:     B_base_reg     <= mmio_wdata;
                 C_BASE_OFFSET:     C_base_reg     <= mmio_wdata;
                 NNZ_OFFSET:        NNZ_reg        <= mmio_wdata;
-                default: ; // ignore
+                default: ;
             endcase
         end
     end
 
-    // start & clear pulses derived from CTRL write
+
     always_comb begin
         start_pulse = 1'b0;
         clear_pulse = 1'b0;
@@ -146,7 +144,7 @@ module accel_top #(
         end
     end
 
-    // MMIO read mux
+
     always_comb begin
         mmio_rdata = '0;
         if (mmio_re && mmio_valid) begin
@@ -174,7 +172,7 @@ module accel_top #(
         end
     end
 
-    // controller
+
     accel_ctrl #(
         .M_MAX      (M_MAX),
         .TN         (TN),
@@ -236,7 +234,7 @@ module accel_top #(
         .dp_wb_data_out   (dp_wb_data_out)
     );
 
-    // datapath
+
     accel_datapath #(
         .M_MAX      (M_MAX),
         .TN         (TN),
